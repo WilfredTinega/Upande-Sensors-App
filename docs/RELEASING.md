@@ -4,11 +4,27 @@ The app is built and released entirely by GitHub Actions. There is no Expo
 account, no EAS credits, and no manual APK step — the runner does what `eas
 build` would do, using `expo prebuild` plus Gradle.
 
-## One-time setup
+## Signing (optional)
 
-You need an Android **upload keystore**. Android identifies an app by its
-signing key, so this must be generated once and then kept forever: an APK signed
-with a different key cannot be installed over an existing one.
+The pipeline works with no setup at all. Without signing secrets it builds and
+publishes a **debug-signed** APK — perfectly installable by sideloading, which
+is how this app is distributed. The release body and job summary both say so.
+
+Its limits, which are the reason to set up a real key eventually:
+
+- it cannot be published to Google Play;
+- Android's debug key is public, so anyone can build an "upgrade" for your app;
+- switching to a real key later means users must **uninstall before updating** —
+  Android refuses to install over an APK signed with a different key.
+
+That last point is the one that bites. If you expect to sign properly at all,
+doing it before the app is on people's phones costs nothing; doing it afterwards
+costs everyone a reinstall.
+
+### Setting up an upload keystore
+
+Android identifies an app by its signing key, so this is generated once and then
+kept forever.
 
 ```bash
 ./scripts/setup-signing.sh
@@ -29,9 +45,17 @@ writes them to `SECRETS-TO-UPLOAD.txt` for pasting into
 | `ANDROID_KEY_PASSWORD` | key password (same as the store password — PKCS12 does not meaningfully separate them) |
 | `ANDROID_KEY_SHA256` | certificate fingerprint, so the build can prove it signed with the right key |
 
-The release job refuses to run until the first four exist. `ANDROID_KEY_SHA256`
-is optional but recommended: without it the build only checks that it wasn't
-debug-signed, rather than that it was signed with *your* key.
+If a secret is already on the repo, `./scripts/upload-secrets.sh` pushes the
+values from `SECRETS-TO-UPLOAD.txt` without regenerating the key.
+
+Signing switches on only when **all four** of the first secrets are present —
+a partial set is treated as unconfigured rather than half-signing. Put them in
+**Repository secrets**, not Environment secrets: environment secrets are only
+injected into jobs that declare `environment:`, and this job does not.
+
+`ANDROID_KEY_SHA256` is optional but recommended: without it the build only
+checks that it wasn't debug-signed, rather than that it was signed with *your*
+key.
 
 **Back up the keystore file and password in a password manager.** It is
 gitignored and it cannot be regenerated. Losing it means every existing install
