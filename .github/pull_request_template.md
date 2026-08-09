@@ -9,11 +9,11 @@
 ## Release impact
 
 Merging advances the version by one odometer step — patch rolls over at 100,
-minor at 50 (`1.0.99` → `1.1.0`, `1.49.99` → `2.0.0`). The **Version gate** job
-posts the exact version this PR will release.
+minor at 50 (`1.0.99` → `1.1.0`, `1.49.99` → `2.0.0`). The **Version preview**
+job posts the exact version this PR will release.
 
-Commit subjects must be conventional commits (`feat:`, `fix:`, `chore:`, …) —
-CI enforces it, and it's what groups the release notes. See
+Prefixing commit subjects with `feat:` / `fix:` / `chore:` etc. sorts them into
+sections in the release notes. It's optional. See
 [docs/RELEASING.md](../docs/RELEASING.md).
 
 ## Testing

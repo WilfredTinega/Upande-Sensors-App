@@ -40,11 +40,11 @@ jobs:
         continue-on-error: true
 
   version:
-    name: Version gate
+    name: Version preview
     runs-on: ubuntu-latest
     steps:
       # The version script walks history back to the last v* tag, so a shallow
-      # clone would make it compute the wrong bump.
+      # clone would make it read the wrong starting point.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -52,27 +52,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      # Commit style no longer decides the version — every merge is one step —
-      # but it is what groups the generated release notes into sections.
-      - name: Require conventional commit subjects
-        run: |
-          set -euo pipefail
-          base=$(git merge-base origin/${{ github.base_ref }} HEAD)
-          bad=0
-          while IFS= read -r subject; do
-            [ -z "$subject" ] && continue
-            if ! printf '%s' "$subject" | grep -qiE '^(feat|fix|perf|refactor|docs|style|test|build|ci|chore|revert)(\([^)]+\))?!?: .+'; then
-              echo "::error::Non-conventional commit subject: $subject"
-              bad=1
-            fi
-          done < <(git log "$base"..HEAD --no-merges --format=%s)
-          if [ "$bad" -ne 0 ]; then
-            echo "Commit subjects must look like 'feat(scope): description'."
-            echo "Allowed types: feat fix perf refactor docs style test build ci chore revert"
-            exit 1
-          fi
-          echo "All commit subjects are conventional."
 
       - name: Compute next version
         id: next

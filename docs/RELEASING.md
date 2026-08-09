@@ -41,9 +41,8 @@ Three jobs run against every PR targeting `main`:
 
 - **Lint & dependency check** — `expo lint`, `expo install --check` (catches
   dependency versions that drift off the SDK 54 line), and `expo-doctor`.
-- **Version gate** — every commit subject must be a conventional commit, and the
-  job posts the exact version and `versionCode` the merge will produce to the run
-  summary.
+- **Version preview** — posts the exact version and `versionCode` the merge will
+  produce to the run summary.
 - **Debug APK** — prebuilds and assembles a debug APK, uploaded as an artifact
   so a reviewer can install the PR on a device. This is what proves the native
   project still compiles before the merge lands.
@@ -92,10 +91,11 @@ up by exactly 1 per release, never collides, and needs no external counter. A
 version outside the limits (`1.50.0`, `1.0.100`) makes the script fail loudly
 rather than silently emit a lower code.
 
-Commit subjects still have to be conventional commits — CI enforces it — but
-that now only controls how the release notes are grouped, not the version.
-Allowed types: `feat` `fix` `perf` `refactor` `docs` `style` `test` `build` `ci`
-`chore` `revert`.
+Commit style has no effect on the version. It is not enforced anywhere. If a
+subject happens to start with a conventional-commit type — `feat:`, `fix:`,
+`perf:`, `refactor:`, `docs:`, `build:`, `ci:`, `chore:` — the release notes
+group it under that heading; anything else lands under **Other**. Either way the
+commit shows up in the changelog.
 
 Preview what a branch would release:
 
