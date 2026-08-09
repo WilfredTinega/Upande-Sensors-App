@@ -13,6 +13,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AuthProvider } from './src/context/AuthContext';
 import { ThemeProvider, useThemePreference } from './src/context/ThemeContext';
+import { UpdateProvider } from './src/context/UpdateContext';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { getTheme } from './src/theme';
 
@@ -50,10 +51,14 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <ThemeProvider>
-        <AuthProvider>
-          <ThemedStatusBar />
-          <RootNavigator />
-        </AuthProvider>
+        {/* Outside AuthProvider: releases live on GitHub, so the check neither
+            needs a session nor should wait for one. */}
+        <UpdateProvider>
+          <AuthProvider>
+            <ThemedStatusBar />
+            <RootNavigator />
+          </AuthProvider>
+        </UpdateProvider>
       </ThemeProvider>
     </SafeAreaProvider>
   );

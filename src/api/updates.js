@@ -68,6 +68,19 @@ export function compareVersions(a, b) {
   return 0;
 }
 
+/**
+ * Where the release workflow always puts the APK.
+ *
+ * The atom feed carries no asset list, so on the rate-limited path there is
+ * nothing to read a download link from. The release job names every asset
+ * `upande_sensors_v<version>.apk` and attaches it to tag `v<version>`, which
+ * makes the URL derivable — see "Name the artifact after the release" in
+ * .github/workflows/release.yml. If that naming ever changes, this must too.
+ */
+function predictedApkUrl(version) {
+  return `https://github.com/${GITHUB_REPO}/releases/download/v${version}/upande_sensors_v${version}.apk`;
+}
+
 /** The `.apk` attached to a release, or null when only sources were published. */
 function findApkAsset(release) {
   const assets = Array.isArray(release?.assets) ? release.assets : [];
@@ -201,8 +214,11 @@ async function fetchLatestReleaseViaAtom() {
     notes: '',
     publishedAt: entry?.match(/<updated>([^<]+)<\/updated>/)?.[1] ?? null,
     pageUrl: `${RELEASES_URL}/tag/${tag}`,
-    downloadUrl: null,
-    assetName: null,
+    // Derived rather than read, because the feed has no asset list. A wrong
+    // guess surfaces as a failed download with the release page still one tap
+    // away, which beats hiding the button on every rate-limited check.
+    downloadUrl: predictedApkUrl(version),
+    assetName: `upande_sensors_v${version}.apk`,
     size: null,
   };
 }
