@@ -36,7 +36,10 @@ export function LoginScreen() {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
+  // On a fresh install there is no site to sign in against, so the server form
+  // is the first thing shown rather than a hidden escape hatch.
   const [serverOpen, setServerOpen] = useState(false);
+  const needsServer = !baseUrl;
   const [draftUrl, setDraftUrl] = useState(baseUrl);
   const [usePassword, setUsePassword] = useState(false);
 
@@ -139,9 +142,20 @@ export function LoginScreen() {
    * unrecognised finger, or a need to sign in as someone else, must not leave
    * anyone stranded on a screen with one button that won't work.
    */
-  const biometricOnly = biometrics.canUnlock && !usePassword && !serverOpen;
+  const biometricOnly = biometrics.canUnlock && !usePassword && !serverOpen && !needsServer;
 
-  const canSubmit = username.trim().length > 0 && password.length > 0 && !busy && !unlocking;
+  // The restore pass settles `baseUrl` asynchronously, so this reacts to it
+  // rather than seeding the initial state — on a cold start it is still empty
+  // when this component first renders.
+  useEffect(() => {
+    if (needsServer) {
+      setServerOpen(true);
+      setDraftUrl('');
+    }
+  }, [needsServer]);
+
+  const canSubmit =
+    !needsServer && username.trim().length > 0 && password.length > 0 && !busy && !unlocking;
 
   // Offer the prompt straight away — making the user tap a button first would
   // be an extra step for the common case.
@@ -187,10 +201,15 @@ export function LoginScreen() {
   const saveServer = async () => {
     const target = draftUrl.trim();
     if (!target) return;
+    const firstRun = needsServer;
     const saved = await setServerUrl(target);
     setServerOpen(false);
     setPassword('');
-    Alert.alert('Server updated', `The app will sign in against ${saved}.`);
+    // On first run the form giving way to the login fields is feedback enough;
+    // an alert confirming a change nobody made reads as an error.
+    if (!firstRun) {
+      Alert.alert('Server updated', `The app will sign in against ${saved}.`);
+    }
   };
 
   const submit = async () => {
@@ -291,6 +310,18 @@ export function LoginScreen() {
               marginBottom: spacing.lg,
             }}
           >
+            {needsServer ? (
+              <Text
+                style={[
+                  type.caption,
+                  { color: t.textSecondary, marginBottom: spacing.md, lineHeight: 17 },
+                ]}
+              >
+                Enter the address of your Upande site to get started. Ask whoever set
+                up your account if you are not sure.
+              </Text>
+            ) : null}
+
             <Field
               label="Site URL"
               value={draftUrl}
@@ -298,18 +329,23 @@ export function LoginScreen() {
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
-              placeholder="https://sensor2.c.frappe.cloud"
+              placeholder="your-site.example.com"
             />
 
             <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+              {/* No Cancel on a fresh install: there is nothing to go back to,
+                  and a dismissable form would strand the user on a login screen
+                  that cannot reach any server. */}
+              {needsServer ? null : (
+                <Button
+                  label="Cancel"
+                  tone="ghost"
+                  style={{ flex: 1 }}
+                  onPress={() => setServerOpen(false)}
+                />
+              )}
               <Button
-                label="Cancel"
-                tone="ghost"
-                style={{ flex: 1 }}
-                onPress={() => setServerOpen(false)}
-              />
-              <Button
-                label="Save"
+                label={needsServer ? 'Continue' : 'Save'}
                 style={{ flex: 1 }}
                 onPress={saveServer}
                 disabled={!draftUrl.trim()}

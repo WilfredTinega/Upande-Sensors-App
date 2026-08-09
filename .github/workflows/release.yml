@@ -97,6 +97,11 @@ jobs:
       - name: Generate release notes
         run: node scripts/version.mjs --keep-version --notes > RELEASE_NOTES.md
 
+      # Must run before prebuild: this is what the APK's embedded manifest
+      # carries, and it is how the in-app update check knows which repo to ask.
+      - name: Stamp the source repository into the build
+        run: node scripts/stamp-build.mjs --repo "$GITHUB_REPOSITORY"
+
       - name: Prebuild Android project
         run: npx expo prebuild --platform android --clean
 

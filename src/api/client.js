@@ -18,7 +18,15 @@
  * why `call()` re-authenticates once on that specific error.
  */
 
-export const DEFAULT_BASE_URL = 'https://sensor2.c.frappe.cloud';
+/**
+ * There is deliberately no default site.
+ *
+ * A hardcoded address means every fresh install points at one customer's
+ * instance until someone changes it, and an installer who forgets is signing in
+ * against the wrong farm. The app starts with no server and asks for one on
+ * first launch; `''` is the honest representation of "not configured yet".
+ */
+export const NO_BASE_URL = '';
 
 export class FrappeError extends Error {
   constructor(message, { status, excType, raw } = {}) {
@@ -147,7 +155,7 @@ function encodeParams(params = {}) {
 }
 
 export class FrappeClient {
-  constructor({ baseUrl = DEFAULT_BASE_URL, timeout = 30000 } = {}) {
+  constructor({ baseUrl = NO_BASE_URL, timeout = 30000 } = {}) {
     this.baseUrl = normaliseBaseUrl(baseUrl);
     this.timeout = timeout;
     this.sid = null;
@@ -174,6 +182,12 @@ export class FrappeClient {
   }
 
   async request(path, { method = 'GET', body, headers, signal } = {}) {
+    // Without this, an unconfigured client would fetch a relative path and fail
+    // with an opaque network error. Say what is actually wrong instead.
+    if (!this.baseUrl) {
+      throw new FrappeError('No server address set yet.', { status: 0 });
+    }
+
     const controller = new AbortController();
 
     // Which of the two abort sources fired decides the error message, so track
@@ -366,7 +380,9 @@ export class FrappeClient {
 
 export function normaliseBaseUrl(input) {
   let url = String(input || '').trim().replace(/\/+$/, '');
-  if (!url) return DEFAULT_BASE_URL;
+  // Empty stays empty — the caller is expected to send the user to the server
+  // form rather than have a placeholder site substituted behind their back.
+  if (!url) return NO_BASE_URL;
   if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
   return url;
 }

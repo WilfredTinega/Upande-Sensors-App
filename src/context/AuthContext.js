@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
 
-import { client, normaliseBaseUrl, DEFAULT_BASE_URL, FrappeError } from '../api/client';
+import { client, normaliseBaseUrl, NO_BASE_URL, FrappeError } from '../api/client';
 import { invalidate } from '../api/cache';
 import { getBiometricCapability, promptBiometric } from '../utils/biometrics';
 import { getUserProfile } from '../api/endpoints';
@@ -28,7 +28,7 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [status, setStatus] = useState('restoring'); // restoring | signedOut | signedIn
   const [user, setUser] = useState(null);
-  const [baseUrl, setBaseUrlState] = useState(DEFAULT_BASE_URL);
+  const [baseUrl, setBaseUrlState] = useState(NO_BASE_URL);
   const [error, setError] = useState(null);
 
   // What the hardware supports, whether the user turned it on, and whether
@@ -132,7 +132,9 @@ export function AuthProvider({ children }) {
           SecureStore.getItemAsync(KEY_BIOMETRIC),
         ]);
 
-        const url = normaliseBaseUrl(storedUrl || DEFAULT_BASE_URL);
+        // Nothing stored means a fresh install: stay unconfigured so the login
+        // screen asks for a site rather than guessing one.
+        const url = normaliseBaseUrl(storedUrl);
         client.setBaseUrl(url);
         if (!cancelled) setBaseUrlState(url);
 

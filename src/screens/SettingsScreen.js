@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, Switch, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, Linking, Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import Constants from 'expo-constants';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -20,11 +20,16 @@ import { getServerVersions, getUserRoles } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
 import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
+import { autoCheckForUpdate, checkForUpdate, UPDATE_ERRORS } from '../api/updates';
+import { RELEASES_URL } from '../config';
 import { formatOffset, offsetOptions } from '../utils/timezone';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { font } from '../theme';
 
 const PRIVILEGED_ROLE = 'System Manager';
+
+/** The running build, as stamped into app.json by the release workflow. */
+const APP_VERSION = Constants.expoConfig?.version ?? null;
 
 /** Apps worth naming on this screen, in the order they matter here. */
 const SHOWN_APPS = [
@@ -74,6 +79,9 @@ export function SettingsScreen() {
   const [switching, setSwitching] = useState(false);
   const [togglingBio, setTogglingBio] = useState(false);
   const [editingServer, setEditingServer] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [update, setUpdate] = useState(null);
+  const [updateError, setUpdateError] = useState(null);
 
   const roles = useQuery(
     user?.name ? cacheKey('user_roles', { user: user.name }) : null,
@@ -125,6 +133,50 @@ export function SettingsScreen() {
     ]);
   };
 
+
+  // Silent, throttled to once a day, and never surfaces an error: this runs
+  // because the screen opened, not because anyone asked.
+  useEffect(() => {
+    let cancelled = false;
+    autoCheckForUpdate(APP_VERSION).then((result) => {
+      if (!cancelled && result) setUpdate((current) => current ?? result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    setUpdateError(null);
+    try {
+      setUpdate(await checkForUpdate(APP_VERSION));
+    } catch (err) {
+      setUpdate(null);
+      setUpdateError({
+        kind: err?.kind ?? UPDATE_ERRORS.FAILED,
+        message: err?.message ?? 'The check could not be completed.',
+      });
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  /**
+   * Hands off to the browser rather than installing in-app: an in-app installer
+   * needs the REQUEST_INSTALL_PACKAGES permission and a new native dependency,
+   * and would not work at all under Expo Go. The browser download ends in the
+   * same Android install prompt.
+   */
+  const openUpdate = async (url) => {
+    const target = url || RELEASES_URL;
+    const ok = await Linking.canOpenURL(target).catch(() => false);
+    if (!ok) {
+      Alert.alert('Cannot open link', `Open this address in a browser:\n\n${target}`);
+      return;
+    }
+    await Linking.openURL(target);
+  };
 
   const appVersions = useMemo(() => {
     const data = versions.data;
@@ -337,6 +389,97 @@ export function SettingsScreen() {
               }}
             />
           )
+        ) : null}
+      </Card>
+
+      {/* Updates arrive as APKs on GitHub Releases, so the app has to tell
+          people a new one exists — nothing else will. Checked on demand, never
+          on a timer: GitHub allows 60 unauthenticated calls an hour per IP, and
+          a whole office shares one. */}
+      <SectionTitle>App updates</SectionTitle>
+      <Card style={{ marginBottom: spacing.xl }}>
+        <Row label="Installed" value={APP_VERSION} />
+
+        {update ? (
+          <>
+            <Row
+              label="Latest"
+              value={update.version}
+              muted={!update.available}
+            />
+            <Text
+              style={[
+                type.caption,
+                {
+                  color: update.available ? t.accent : t.textSecondary,
+                  marginTop: spacing.xs,
+                  lineHeight: 17,
+                },
+              ]}
+            >
+              {update.available
+                ? `Version ${update.version} is available${update.size ? ` · ${update.size}` : ''}.`
+                : 'You are on the latest version.'}
+            </Text>
+
+            {update.available && update.notes ? (
+              <Text
+                numberOfLines={6}
+                style={[
+                  type.caption,
+                  { color: t.textMuted, marginTop: spacing.sm, lineHeight: 17 },
+                ]}
+              >
+                {update.notes}
+              </Text>
+            ) : null}
+          </>
+        ) : null}
+
+        {updateError ? (
+          <Text
+            style={[
+              type.caption,
+              {
+                color:
+                  updateError.kind === UPDATE_ERRORS.RATE_LIMITED
+                    ? t.status.warning
+                    : t.status.critical,
+                marginTop: spacing.xs,
+                lineHeight: 17,
+              },
+            ]}
+          >
+            {updateError.message}
+            {updateError.kind === UPDATE_ERRORS.RATE_LIMITED
+              ? ' The releases page still works.'
+              : ''}
+          </Text>
+        ) : null}
+
+        <Button
+          label={checkingUpdate ? 'Checking…' : 'Check for updates'}
+          tone="ghost"
+          style={{ marginTop: spacing.md }}
+          onPress={onCheckUpdate}
+          loading={checkingUpdate}
+        />
+
+        {update?.available ? (
+          <Button
+            label={update.downloadUrl ? 'Download update' : 'Open release page'}
+            style={{ marginTop: spacing.sm }}
+            onPress={() => openUpdate(update.downloadUrl || update.pageUrl)}
+          />
+        ) : null}
+
+        {updateError ? (
+          <Button
+            label="Open releases page"
+            tone="ghost"
+            style={{ marginTop: spacing.sm }}
+            onPress={() => openUpdate(RELEASES_URL)}
+          />
         ) : null}
       </Card>
 
