@@ -14,8 +14,17 @@ import { getServerOffsetMinutes } from './timezone';
  * Batched rather than sent per navigation: moving through four screens used to
  * be four requests, each about a second against the cloud instance, all of them
  * competing with the data the user is actually waiting for. One request a
- * minute carries the same visits at a fraction of the cost, and the delay is
- * invisible — nothing on screen is waiting on it.
+ * minute carries the same visits at a fraction of the cost, and nothing on
+ * screen is waiting on it.
+ *
+ * What batching does cost is timing. `Document.set_user_and_timestamp` assigns
+ * `creation = now()` to every new document, so the timestamp this app sends is
+ * discarded and a whole batch lands stamped with the moment it was written —
+ * up to a minute after the visits happened, and identical across the batch.
+ * That is true of Frappe's own `deferred_insert` too, where the delay is the
+ * scheduler's 15 minutes rather than our 60 seconds. The visit time is still
+ * sent, so a site that ever honours it gets the real figure, but nothing here
+ * should be read as a per-second record of when a screen was opened.
  *
  * The framework's own route is `deferred_insert`, which pushes to a Redis queue
  * that `frappe.deferred_insert.save_to_db` drains on a 15-minute cron. On this
@@ -76,16 +85,27 @@ let status = { sentAt: null, sentCount: 0, error: null, pending: 0, via: null };
 let sessionUser = null;
 
 /**
- * Set once the direct insert has been refused for want of permission.
+ * When the direct insert was last refused for want of permission.
  *
  * Only a permission error sets it — a network failure says nothing about
  * whether the row could be written, and must not push the whole session onto
  * the fallback.
+ *
+ * Timestamped rather than latched: a 403 from Frappe is ambiguous (the client
+ * treats an expired session and a genuine permission boundary the same way once
+ * a re-login has already been tried), and a permission granted while someone is
+ * signed in should start working without them signing out. The direct path is
+ * therefore retried periodically instead of being abandoned for the session.
  */
-let directRefused = false;
+let directRefusedAt = 0;
+const RETRY_DIRECT_AFTER_MS = 10 * 60 * 1000;
+
+function directAllowed() {
+  return !directRefusedAt || Date.now() - directRefusedAt > RETRY_DIRECT_AFTER_MS;
+}
 
 export function getRecordingStatus() {
-  return { ...status, pending: pending.length, directRefused };
+  return { ...status, pending: pending.length, directRefused: !!directRefusedAt };
 }
 
 /**
@@ -170,13 +190,14 @@ function scheduleRetry() {
  * diverted onto a slower path that might not be needed.
  */
 async function send(batch) {
-  if (!directRefused) {
+  if (directAllowed()) {
     try {
       await insertRouteHistory(batch, sessionUser);
+      directRefusedAt = 0;
       return 'direct';
     } catch (err) {
       if (!err?.isPermission) throw err;
-      directRefused = true;
+      directRefusedAt = Date.now();
     }
   }
 
@@ -236,9 +257,15 @@ export function recordRoute(route) {
   // Oldest go first when the cap is hit: a recent visit is the more useful
   // record, and the oldest have already had every chance to send.
   if (pending.length > MAX_PENDING) pending = pending.slice(-MAX_PENDING);
-  // Not sent here. The minute timer collects whatever has accumulated, so a
-  // burst of navigation is one request rather than one per screen. Each visit
-  // carries its own timestamp, so batching costs no accuracy.
+  // Not sent here — the minute timer collects whatever has accumulated, so a
+  // burst of navigation is one request rather than one per screen.
+  //
+  // Written to disk on every visit, though. Sending used to happen here and
+  // `persist` rode along with it; batching without this left up to a minute of
+  // visits in memory alone, so a crash or a force-stop lost them and the
+  // "survives being killed" promise above was no longer true. The file is a few
+  // hundred bytes and the write is not awaited.
+  persist();
 }
 
 /** Start recording once signed in; stop on sign-out. */
@@ -250,7 +277,7 @@ export function setRouteHistoryEnabled(next, user) {
   if (next) {
     // A refusal belonged to the account that just left; the next one may well
     // be allowed to write.
-    directRefused = false;
+    directRefusedAt = 0;
     restore();
     flushTimer = setInterval(flush, FLUSH_EVERY_MS);
     /**

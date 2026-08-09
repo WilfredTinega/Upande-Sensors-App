@@ -42,7 +42,11 @@ yarn-error.*
 
 # release artifacts
 *.keystore
+*.p12
 *.apk
 *.aab
+
+# signing material — never commit these
+SECRETS-TO-UPLOAD.txt
 RELEASE_NOTES.md
 version.json

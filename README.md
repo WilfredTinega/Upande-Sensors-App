@@ -73,10 +73,11 @@ For Play Store submission, `eas build -p android --profile production` produces 
 
 ## Pointing at a different ERPNext site
 
-The default backend is set by `DEFAULT_BASE_URL` in [`src/api/client.js`](src/api/client.js):
+The default backend is set by `DEFAULT_BASE_URL` in [`src/api/client.js`](src/api/client.js).
+It is a plain site address, for example:
 
-```js
-export const DEFAULT_BASE_URL = 'https://sensor2.c.frappe.cloud';
+```
+https://your-site.example.com
 ```
 
 You do not need to rebuild to change sites, but doing it in-app requires the **System Manager**
