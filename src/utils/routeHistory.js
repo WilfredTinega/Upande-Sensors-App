@@ -1,22 +1,30 @@
 import { AppState } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 
-import { client } from '../api/client';
+import { insertRouteHistory, queueRouteHistory } from '../api/endpoints';
 import { getServerOffsetMinutes } from './timezone';
 
 /**
  * Records which screens are opened, into Frappe's own `Route History` doctype.
  *
- * Uses the framework's whitelisted `deferred_insert`, which stamps `user` from
- * the session server-side — a client cannot attribute a visit to someone else.
- * It is whitelisted without a role check, so every signed-in account can record;
- * the rows are written by the scheduler running as Administrator, so the
- * doctype granting `create` to nobody doesn't stand in the way.
+ * Visits are **inserted directly**, in bulk, once a minute. The app is the
+ * thing recording; nothing about it should depend on a cron running on the
+ * site.
  *
- * Note what "immediately" can and cannot mean here. `deferred_insert` pushes to
- * a Redis queue that Frappe's scheduler drains into the doctype on a 15-minute
- * cron (`frappe.deferred_insert.save_to_db`). The app records in real time; how
- * quickly rows *appear* is the server's scheduler, not ours.
+ * Batched rather than sent per navigation: moving through four screens used to
+ * be four requests, each about a second against the cloud instance, all of them
+ * competing with the data the user is actually waiting for. One request a
+ * minute carries the same visits at a fraction of the cost, and the delay is
+ * invisible — nothing on screen is waiting on it.
+ *
+ * The framework's own route is `deferred_insert`, which pushes to a Redis queue
+ * that `frappe.deferred_insert.save_to_db` drains on a 15-minute cron. On this
+ * instance that scheduler stopped, and every account except Administrator
+ * silently stopped being recorded — the visits were accepted, queued, and never
+ * written. It is kept here strictly as a fallback, because a direct insert
+ * needs `create` on Route History and that doctype grants it to no role by
+ * default. Whichever route is in use is reported by `getRecordingStatus`, so a
+ * site running on the fallback is visible rather than guessed at.
  *
  * Delivery is the part this file has to get right. A visit that fails to send
  * is kept and retried, survives the app being backgrounded or killed, and is
@@ -32,6 +40,7 @@ let inFlight = false;
 /** Retry state. Reset by any successful send. */
 let attempt = 0;
 let retryTimer = null;
+let flushTimer = null;
 let appStateSub = null;
 
 /**
@@ -41,6 +50,8 @@ let appStateSub = null;
  */
 const MAX_PENDING = 500;
 const BATCH = 100;
+/** How often the queue is emptied. Visits accumulate locally in between. */
+const FLUSH_EVERY_MS = 60000;
 /** Backoff between retries. The last value repeats for as long as it takes. */
 const RETRY_MS = [5000, 20000, 60000, 300000];
 
@@ -54,10 +65,27 @@ const STORE = 'route-history-pending.json';
  * also means that when one account records and another doesn't, there is no way
  * to tell why. This is that way.
  */
-let status = { sentAt: null, sentCount: 0, error: null, pending: 0 };
+let status = { sentAt: null, sentCount: 0, error: null, pending: 0, via: null };
+
+/**
+ * The account these visits belong to, for the `user` field.
+ *
+ * A direct insert has to say who the visit was by; only `deferred_insert` fills
+ * that in from the session.
+ */
+let sessionUser = null;
+
+/**
+ * Set once the direct insert has been refused for want of permission.
+ *
+ * Only a permission error sets it — a network failure says nothing about
+ * whether the row could be written, and must not push the whole session onto
+ * the fallback.
+ */
+let directRefused = false;
 
 export function getRecordingStatus() {
-  return { ...status, pending: pending.length };
+  return { ...status, pending: pending.length, directRefused };
 }
 
 /**
@@ -134,6 +162,28 @@ function scheduleRetry() {
   }, wait);
 }
 
+/**
+ * Write a batch, directly if allowed and through the queue if not.
+ *
+ * Returns which route was used. Anything other than a permission error is
+ * rethrown: the batch stays queued and is retried, rather than being quietly
+ * diverted onto a slower path that might not be needed.
+ */
+async function send(batch) {
+  if (!directRefused) {
+    try {
+      await insertRouteHistory(batch, sessionUser);
+      return 'direct';
+    } catch (err) {
+      if (!err?.isPermission) throw err;
+      directRefused = true;
+    }
+  }
+
+  await queueRouteHistory(batch);
+  return 'queued';
+}
+
 async function flush() {
   if (!pending.length || !enabled || inFlight) return;
 
@@ -143,11 +193,7 @@ async function flush() {
   const batch = pending.slice(0, BATCH);
 
   try {
-    await client.call(
-      'frappe.desk.doctype.route_history.route_history.deferred_insert',
-      { routes: JSON.stringify(batch) },
-      { write: true },
-    );
+    const via = await send(batch);
     // Only what was actually accepted is dropped from the queue — anything
     // recorded while the request was open stays.
     pending = pending.slice(batch.length);
@@ -157,6 +203,7 @@ async function flush() {
       sentCount: status.sentCount + batch.length,
       error: null,
       pending: pending.length,
+      via,
     };
     persist();
   } catch (err) {
@@ -189,16 +236,23 @@ export function recordRoute(route) {
   // Oldest go first when the cap is hit: a recent visit is the more useful
   // record, and the oldest have already had every chance to send.
   if (pending.length > MAX_PENDING) pending = pending.slice(-MAX_PENDING);
-  flush();
+  // Not sent here. The minute timer collects whatever has accumulated, so a
+  // burst of navigation is one request rather than one per screen. Each visit
+  // carries its own timestamp, so batching costs no accuracy.
 }
 
 /** Start recording once signed in; stop on sign-out. */
-export function setRouteHistoryEnabled(next) {
+export function setRouteHistoryEnabled(next, user) {
+  if (next) sessionUser = user || sessionUser;
   if (next === enabled) return;
   enabled = next;
 
   if (next) {
+    // A refusal belonged to the account that just left; the next one may well
+    // be allowed to write.
+    directRefused = false;
     restore();
+    flushTimer = setInterval(flush, FLUSH_EVERY_MS);
     /**
      * Send what's queued when the app leaves the foreground.
      *
@@ -206,8 +260,14 @@ export function setRouteHistoryEnabled(next) {
      * moment a request can still be made.
      */
     appStateSub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') flush();
-      else persist();
+      if (state === 'active') {
+        flush();
+        return;
+      }
+      // Going away: send now rather than at the next tick, since Android may
+      // kill the process before it arrives. Persist either way.
+      persist();
+      flush();
     });
     flush();
     return;
@@ -217,6 +277,8 @@ export function setRouteHistoryEnabled(next) {
   attempt = 0;
   clearTimeout(retryTimer);
   retryTimer = null;
+  clearInterval(flushTimer);
+  flushTimer = null;
   appStateSub?.remove();
   appStateSub = null;
   /**

@@ -114,12 +114,12 @@ export function font(weight = '400') {
 }
 
 export const type = {
-  display: { fontSize: 30, fontWeight: '700', fontFamily: font('700'), fontFamily: FONTS[700], letterSpacing: -0.5 },
-  title: { fontSize: 20, fontWeight: '700', fontFamily: font('700'), fontFamily: FONTS[700], letterSpacing: -0.3 },
-  heading: { fontSize: 16, fontWeight: '600', fontFamily: font('600'), fontFamily: FONTS[600] },
-  body: { fontSize: 14, fontWeight: '400', fontFamily: font('400'), fontFamily: FONTS[400] },
-  label: { fontSize: 12, fontWeight: '600', fontFamily: font('600'), fontFamily: FONTS[600], letterSpacing: 0.3 },
-  caption: { fontSize: 11, fontWeight: '500', fontFamily: font('500'), fontFamily: FONTS[500] },
+  display: { fontSize: 30, fontWeight: '700', fontFamily: font('700'), letterSpacing: -0.5 },
+  title: { fontSize: 20, fontWeight: '700', fontFamily: font('700'), letterSpacing: -0.3 },
+  heading: { fontSize: 16, fontWeight: '600', fontFamily: font('600') },
+  body: { fontSize: 14, fontWeight: '400', fontFamily: font('400') },
+  label: { fontSize: 12, fontWeight: '600', fontFamily: font('600'), letterSpacing: 0.3 },
+  caption: { fontSize: 11, fontWeight: '500', fontFamily: font('500') },
   mono: { fontSize: 12, fontFamily: FONTS[400], fontVariant: ['tabular-nums'] },
 };
 

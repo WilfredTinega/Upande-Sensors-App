@@ -27,7 +27,18 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "lint": "expo lint",
+    "doctor": "expo-doctor",
+    "prebuild": "expo prebuild --platform android --clean",
+    "version:next": "node scripts/version.mjs",
+    "version:apply": "node scripts/version.mjs --apply",
+    "version:notes": "node scripts/version.mjs --notes",
+    "build:apk": "npm run prebuild && cd android && ./gradlew assembleRelease"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.5",
+    "eslint-config-expo": "~10.0.0"
   },
   "private": true
 }
