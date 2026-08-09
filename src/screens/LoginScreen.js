@@ -310,18 +310,6 @@ export function LoginScreen() {
               marginBottom: spacing.lg,
             }}
           >
-            {needsServer ? (
-              <Text
-                style={[
-                  type.caption,
-                  { color: t.textSecondary, marginBottom: spacing.md, lineHeight: 17 },
-                ]}
-              >
-                Enter the address of your Upande site to get started. Ask whoever set
-                up your account if you are not sure.
-              </Text>
-            ) : null}
-
             <Field
               label="Site URL"
               value={draftUrl}
