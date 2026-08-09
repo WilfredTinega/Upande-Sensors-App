@@ -1,6 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Alert, Linking, Pressable, ScrollView, Switch, Text, View } from 'react-native';
-import Constants from 'expo-constants';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import {
@@ -20,16 +19,15 @@ import { getServerVersions, getUserRoles } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
 import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
-import { autoCheckForUpdate, checkForUpdate, UPDATE_ERRORS } from '../api/updates';
+import { UPDATE_ERRORS } from '../api/updates';
+import { downloadAndInstallApk } from '../utils/installApk';
+import { APP_VERSION, useUpdate } from '../context/UpdateContext';
 import { RELEASES_URL } from '../config';
 import { formatOffset, offsetOptions } from '../utils/timezone';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { font } from '../theme';
 
 const PRIVILEGED_ROLE = 'System Manager';
-
-/** The running build, as stamped into app.json by the release workflow. */
-const APP_VERSION = Constants.expoConfig?.version ?? null;
 
 /** Apps worth naming on this screen, in the order they matter here. */
 const SHOWN_APPS = [
@@ -79,9 +77,16 @@ export function SettingsScreen() {
   const [switching, setSwitching] = useState(false);
   const [togglingBio, setTogglingBio] = useState(false);
   const [editingServer, setEditingServer] = useState(false);
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [update, setUpdate] = useState(null);
-  const [updateError, setUpdateError] = useState(null);
+  const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState(null); // 0..1, or null when unknown
+  // Shared with the tab badge — the launch check has usually already run by the
+  // time this screen opens, so the card renders populated rather than empty.
+  const {
+    update,
+    checking: checkingUpdate,
+    error: updateError,
+    check: onCheckUpdate,
+  } = useUpdate();
 
   const roles = useQuery(
     user?.name ? cacheKey('user_roles', { user: user.name }) : null,
@@ -134,41 +139,8 @@ export function SettingsScreen() {
   };
 
 
-  // Silent, throttled to once a day, and never surfaces an error: this runs
-  // because the screen opened, not because anyone asked.
-  useEffect(() => {
-    let cancelled = false;
-    autoCheckForUpdate(APP_VERSION).then((result) => {
-      if (!cancelled && result) setUpdate((current) => current ?? result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const onCheckUpdate = async () => {
-    setCheckingUpdate(true);
-    setUpdateError(null);
-    try {
-      setUpdate(await checkForUpdate(APP_VERSION));
-    } catch (err) {
-      setUpdate(null);
-      setUpdateError({
-        kind: err?.kind ?? UPDATE_ERRORS.FAILED,
-        message: err?.message ?? 'The check could not be completed.',
-      });
-    } finally {
-      setCheckingUpdate(false);
-    }
-  };
-
-  /**
-   * Hands off to the browser rather than installing in-app: an in-app installer
-   * needs the REQUEST_INSTALL_PACKAGES permission and a new native dependency,
-   * and would not work at all under Expo Go. The browser download ends in the
-   * same Android install prompt.
-   */
-  const openUpdate = async (url) => {
+  /** Last resort, and the only route when a release has no APK attached. */
+  const openInBrowser = async (url) => {
     const target = url || RELEASES_URL;
     const ok = await Linking.canOpenURL(target).catch(() => false);
     if (!ok) {
@@ -176,6 +148,36 @@ export function SettingsScreen() {
       return;
     }
     await Linking.openURL(target);
+  };
+
+  /**
+   * Download the APK and hand it straight to Android's installer.
+   *
+   * Falls back to the release page on failure rather than dead-ending: the
+   * download can fail for reasons the user can work around in a browser (a
+   * captive portal, a URL guessed from the atom feed that does not exist).
+   */
+  const installUpdate = async () => {
+    if (!update?.downloadUrl) {
+      await openInBrowser(update?.pageUrl);
+      return;
+    }
+    setDownloading(true);
+    setProgress(null);
+    try {
+      await downloadAndInstallApk(update.downloadUrl, {
+        fileName: update.assetName,
+        onProgress: setProgress,
+      });
+    } catch (err) {
+      Alert.alert('Update failed', err?.message ?? 'The update could not be installed.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open in browser', onPress: () => openInBrowser(update?.pageUrl) },
+      ]);
+    } finally {
+      setDownloading(false);
+      setProgress(null);
+    }
   };
 
   const appVersions = useMemo(() => {
@@ -350,7 +352,7 @@ export function SettingsScreen() {
         ) : (
           appVersions.map((a) => <Row key={a.label} label={a.label} value={a.version} />)
         )}
-        <Row label="App" value={Constants.expoConfig?.version} />
+        <Row label="App" value={APP_VERSION} />
 
         {isSystemManager ? (
           editingServer ? (
@@ -463,14 +465,56 @@ export function SettingsScreen() {
           style={{ marginTop: spacing.md }}
           onPress={onCheckUpdate}
           loading={checkingUpdate}
+          disabled={downloading}
         />
 
         {update?.available ? (
-          <Button
-            label={update.downloadUrl ? 'Download update' : 'Open release page'}
-            style={{ marginTop: spacing.sm }}
-            onPress={() => openUpdate(update.downloadUrl || update.pageUrl)}
-          />
+          <>
+            <Button
+              label={
+                downloading
+                  ? progress === null
+                    ? 'Downloading…'
+                    : `Downloading ${Math.round(progress * 100)}%`
+                  : `Update to ${update.version}`
+              }
+              style={{ marginTop: spacing.sm }}
+              onPress={installUpdate}
+              loading={downloading}
+            />
+
+            {/* A determinate bar only once the server has told us the size;
+                before then the button's spinner is the only honest signal. */}
+            {downloading && progress !== null ? (
+              <View
+                style={{
+                  height: 4,
+                  borderRadius: 2,
+                  backgroundColor: t.surfaceSunken,
+                  marginTop: spacing.sm,
+                  overflow: 'hidden',
+                }}
+              >
+                <View
+                  style={{
+                    width: `${Math.round(progress * 100)}%`,
+                    height: '100%',
+                    backgroundColor: t.accent,
+                  }}
+                />
+              </View>
+            ) : null}
+
+            <Text
+              style={[
+                type.caption,
+                { color: t.textMuted, marginTop: spacing.sm, lineHeight: 16 },
+              ]}
+            >
+              Android will ask you to confirm the install. If it refuses, allow this
+              app to install unknown apps and try again.
+            </Text>
+          </>
         ) : null}
 
         {updateError ? (
@@ -478,7 +522,7 @@ export function SettingsScreen() {
             label="Open releases page"
             tone="ghost"
             style={{ marginTop: spacing.sm }}
-            onPress={() => openUpdate(RELEASES_URL)}
+            onPress={() => openInBrowser(RELEASES_URL)}
           />
         ) : null}
       </Card>

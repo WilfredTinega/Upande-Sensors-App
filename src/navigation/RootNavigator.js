@@ -23,6 +23,7 @@ import { navigationRef, setCurrentRoute } from './ref';
 import { recordRoute, setRouteHistoryEnabled } from '../utils/routeHistory';
 import { DashboardProvider } from '../context/DashboardContext';
 import { useAuth } from '../context/AuthContext';
+import { useUpdate } from '../context/UpdateContext';
 import { useTheme } from '../hooks/useTheme';
 import { font } from '../theme';
 
@@ -56,6 +57,7 @@ const SITE_FILTER_ROUTES = new Set(['Live', 'Readings', 'Dashboard']);
 function SignedInApp() {
   const t = useTheme();
   const { signOut, user } = useAuth();
+  const { available: updateAvailable } = useUpdate();
 
   const [signOutOpen, setSignOutOpen] = useState(false);
 
@@ -139,7 +141,32 @@ function SignedInApp() {
                 // The account tab shows who is signed in — their ERPNext avatar,
                 // or their initials — rather than a generic person glyph.
                 if (route.name === 'Account') {
-                  return <UserAvatar size={size ?? 22} focused={focused} color={color} />;
+                  return (
+                    <View>
+                      <UserAvatar size={size ?? 22} focused={focused} color={color} />
+                      {/* A new APK is the one thing the app must volunteer:
+                          nothing else will tell a field phone it is out of
+                          date. A dot, not a count — there is only ever one
+                          newer version, and the number would mean nothing. */}
+                      {updateAvailable ? (
+                        <View
+                          style={{
+                            position: 'absolute',
+                            top: -1,
+                            right: -1,
+                            width: 10,
+                            height: 10,
+                            borderRadius: 5,
+                            backgroundColor: t.accent,
+                            // Reads as a badge rather than a smudge on top of
+                            // whichever avatar colour is underneath.
+                            borderWidth: 1.5,
+                            borderColor: t.surface,
+                          }}
+                        />
+                      ) : null}
+                    </View>
+                  );
                 }
                 const [active, inactive] = ICONS[route.name] || ICONS.Live;
                 return (
