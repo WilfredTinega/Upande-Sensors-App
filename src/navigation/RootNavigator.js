@@ -55,7 +55,7 @@ const SITE_FILTER_ROUTES = new Set(['Live', 'Readings', 'Dashboard']);
 
 function SignedInApp() {
   const t = useTheme();
-  const { signOut } = useAuth();
+  const { signOut, user } = useAuth();
 
   const [signOutOpen, setSignOutOpen] = useState(false);
 
@@ -68,7 +68,9 @@ function SignedInApp() {
    * Setting it here means it is on before any child can mount; the effect is
    * kept only to switch it off when the signed-in tree unmounts.
    */
-  setRouteHistoryEnabled(true);
+  // The account is passed in because a direct insert has to name the user it
+  // is recording; only the framework's queued route fills that in itself.
+  setRouteHistoryEnabled(true, user?.name);
   React.useEffect(() => () => setRouteHistoryEnabled(false), []);
 
   const onRouteChange = () => {
@@ -103,7 +105,12 @@ function SignedInApp() {
             initialRouteName="Dashboard"
             screenOptions={({ route }) => ({
               headerStyle: { backgroundColor: t.surface },
-              headerTitleStyle: { color: t.textPrimary, fontSize: 17, fontWeight: '700', fontFamily: font('700') },
+              headerTitleStyle: {
+                color: t.textPrimary,
+                fontSize: 17,
+                fontWeight: '700',
+                fontFamily: font('700'),
+              },
               headerShadowVisible: false,
               // Only the data screens are scoped by a dashboard tab, so only
               // they get the opener — a list icon on Account would open a
@@ -135,7 +142,9 @@ function SignedInApp() {
                   return <UserAvatar size={size ?? 22} focused={focused} color={color} />;
                 }
                 const [active, inactive] = ICONS[route.name] || ICONS.Live;
-                return <Ionicons name={focused ? active : inactive} size={size ?? 22} color={color} />;
+                return (
+                  <Ionicons name={focused ? active : inactive} size={size ?? 22} color={color} />
+                );
               },
             })}
           >

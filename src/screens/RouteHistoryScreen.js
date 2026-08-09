@@ -594,6 +594,22 @@ export function RouteHistoryScreen() {
       {/* Whether this device is managing to record at all. Without it, an
           account whose sends are being refused looks identical to one that
           simply hasn't opened anything. */}
+      {/* The fallback is not a failure, but it is the difference between a
+          visit being a row now and being a row whenever the site's scheduler
+          next runs — which on this instance is why entries stopped appearing.
+          Naming the missing permission saves the search. */}
+      {recording.directRefused ? (
+        <Text
+          style={[
+            type.caption,
+            { color: t.status.warning, marginBottom: spacing.sm, lineHeight: 16 },
+          ]}
+        >
+          ▲ This account may not write route history directly, so visits go to the site queue and
+          appear only when its scheduler runs. Grant create on Route History to fix it.
+        </Text>
+      ) : null}
+
       {recording.error ? (
         <Text
           style={[
@@ -614,6 +630,10 @@ export function RouteHistoryScreen() {
           {recording.sentCount === 1 ? '' : 's'} · last{' '}
           {Math.max(0, Math.round((Date.now() - recording.sentAt) / 1000))}s ago
           {recording.pending ? ` · ${recording.pending} queued` : ''}
+          {/* Which route is in use. On the fallback the rows only appear when
+              the site's scheduler next runs, which is worth knowing before
+              wondering where they went. */}
+          {recording.via === 'queued' ? ' · via the site queue' : ''}
         </Text>
       ) : null}
 

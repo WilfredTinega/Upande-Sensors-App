@@ -206,6 +206,50 @@ export async function flushDeferredInserts(signal) {
   }
 }
 
+/* ── Route history ───────────────────────────────────────────────────────── */
+
+/**
+ * Write visits straight into `Route History`, one request for the batch.
+ *
+ * The alternative — `deferred_insert` — only pushes to a Redis queue that the
+ * site's scheduler drains on a 15-minute cron, so nothing is recorded at all
+ * while that scheduler is stopped, and the app has no way to tell. Inserting
+ * here means a visit is a row the moment the request returns.
+ *
+ * `user` is sent explicitly because this is a plain insert: `deferred_insert`
+ * stamps it from the session server-side, and nothing else will.
+ *
+ * Requires `create` on Route History, which ships granted to no role at all —
+ * see `insertRouteHistory` in `utils/routeHistory.js` for what happens when
+ * that is refused.
+ */
+export function insertRouteHistory(rows, user, signal) {
+  const docs = (rows || []).map((r) => ({
+    doctype: 'Route History',
+    route: r.route,
+    creation: r.creation,
+    ...(user ? { user } : {}),
+  }));
+
+  return client.call(
+    'frappe.client.insert_many',
+    { docs: JSON.stringify(docs) },
+    {
+      write: true,
+      signal,
+    },
+  );
+}
+
+/** The queued route: Redis now, rows whenever the site's scheduler next runs. */
+export function queueRouteHistory(rows, signal) {
+  return client.call(
+    'frappe.desk.doctype.route_history.route_history.deferred_insert',
+    { routes: JSON.stringify(rows) },
+    { write: true, signal },
+  );
+}
+
 /* ── Issues and feature requests ─────────────────────────────────────────── */
 
 /**
