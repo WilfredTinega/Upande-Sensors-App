@@ -165,8 +165,11 @@ jobs:
           fi
 
           if [ -n "${EXPECTED_SHA256:-}" ]; then
+            # apksigner prefixes each line with the signature scheme
+            # ("V2 Signer: certificate SHA-256 digest: ab12…"), so the digest is
+            # whatever follows the LAST colon — not a fixed field number.
             actual=$(grep -i 'certificate SHA-256 digest' <<<"$certs" | head -1 |
-              awk -F': ' '{print tolower($2)}' | tr -d ' ')
+              sed 's/.*[Dd]igest:[[:space:]]*//' | tr -d ' :' | tr 'A-Z' 'a-z')
             expected=$(tr 'A-Z' 'a-z' <<<"$EXPECTED_SHA256" | tr -d ' :')
             if [ "$actual" != "$expected" ]; then
               echo "::error::Signing certificate $actual does not match the expected upload key." >&2
