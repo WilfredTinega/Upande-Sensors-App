@@ -11,19 +11,27 @@ signing key, so this must be generated once and then kept forever: an APK signed
 with a different key cannot be installed over an existing one.
 
 ```bash
-gh auth login              # if you haven't
 ./scripts/setup-signing.sh
 ```
 
-That generates `upande-sensors-upload.keystore`, prints its password once, and
-uploads four repository secrets:
+That generates `upande-sensors-upload.keystore` (PKCS12 — Gradle's default store
+type) and prints its password once. It uses `keytool` if a JDK is installed and
+falls back to `openssl` otherwise, so it works without a JDK. If the GitHub CLI
+is installed and authenticated it uploads the secrets directly; otherwise it
+writes them to `SECRETS-TO-UPLOAD.txt` for pasting into
+**Settings → Secrets and variables → Actions**.
 
 | Secret | Contents |
 | --- | --- |
 | `ANDROID_KEYSTORE_BASE64` | the keystore, base64-encoded |
 | `ANDROID_KEYSTORE_PASSWORD` | keystore password |
 | `ANDROID_KEY_ALIAS` | key alias (`upande-sensors`) |
-| `ANDROID_KEY_PASSWORD` | key password |
+| `ANDROID_KEY_PASSWORD` | key password (same as the store password — PKCS12 does not meaningfully separate them) |
+| `ANDROID_KEY_SHA256` | certificate fingerprint, so the build can prove it signed with the right key |
+
+The release job refuses to run until the first four exist. `ANDROID_KEY_SHA256`
+is optional but recommended: without it the build only checks that it wasn't
+debug-signed, rather than that it was signed with *your* key.
 
 **Back up the keystore file and password in a password manager.** It is
 gitignored and it cannot be regenerated. Losing it means every existing install
@@ -57,7 +65,7 @@ Three jobs run against every PR targeting `main`:
 5. Verifies the signature with `apksigner`.
 6. Commits `chore(release): x.y.z [skip ci]`, tags `vx.y.z`, pushes both.
 7. Publishes a GitHub Release with generated notes and
-   `upande-sensors-x.y.z.apk` attached.
+   `upande_sensors_vx.y.z.apk` attached.
 
 Users get updates by downloading the APK from the Releases page.
 

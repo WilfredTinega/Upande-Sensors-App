@@ -117,25 +117,52 @@ jobs:
             -PUPANDE_KEY_PASSWORD="$KEY_PASSWORD"
 
       - name: Confirm the APK is signed with the upload key
+        env:
+          EXPECTED_SHA256: ${{ secrets.ANDROID_KEY_SHA256 }}
         run: |
           set -euo pipefail
           apk=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
           apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort | tail -1)
-          "$apksigner" verify --print-certs "$apk"
+          certs=$("$apksigner" verify --print-certs "$apk")
+          echo "$certs"
+
+          # `verify --print-certs` alone proves only that the APK is signed by
+          # *something*. The signing plugin falls back to the debug key when its
+          # -P properties are missing, so without a comparison a debug-signed
+          # build sails through — and Play will not accept an upgrade for it,
+          # nor will it install over an existing release.
+          if grep -qi 'CN=Android Debug' <<<"$certs"; then
+            echo "::error::APK is signed with the Android debug key, not the upload key." >&2
+            exit 1
+          fi
+
+          if [ -n "${EXPECTED_SHA256:-}" ]; then
+            actual=$(grep -i 'certificate SHA-256 digest' <<<"$certs" | head -1 |
+              awk -F': ' '{print tolower($2)}' | tr -d ' ')
+            expected=$(tr 'A-Z' 'a-z' <<<"$EXPECTED_SHA256" | tr -d ' :')
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::Signing certificate $actual does not match the expected upload key." >&2
+              exit 1
+            fi
+            echo "Signing certificate matches the expected upload key."
+          else
+            echo "::warning::ANDROID_KEY_SHA256 is not set — only the debug-key check ran." >&2
+          fi
 
       - name: Name the artifact after the release
         id: apk
         run: |
           set -euo pipefail
           src=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
-          dest="upande-sensors-${{ steps.version.outputs.version }}.apk"
+          dest="upande_sensors_v${{ steps.version.outputs.version }}.apk"
           mv "$src" "$dest"
           echo "path=$dest" >> "$GITHUB_OUTPUT"
+          echo "name=${dest%.apk}" >> "$GITHUB_OUTPUT"
 
       - name: Always keep the APK, even if publishing fails
         uses: actions/upload-artifact@v4
         with:
-          name: upande-sensors-${{ steps.version.outputs.version }}
+          name: ${{ steps.apk.outputs.name }}
           path: ${{ steps.apk.outputs.path }}
           retention-days: 90
 
@@ -153,8 +180,12 @@ jobs:
           # directory exists. Throw that away and re-apply only the version, so
           # the release commit carries the bump and nothing else.
           git checkout -- package.json
-          npm pkg set version="${{ steps.version.outputs.version }}"
-          git add app.json package.json
+          # `npm version` rather than `npm pkg set version`: the latter leaves
+          # package-lock.json's own root version behind, which then shows up as
+          # unrelated noise in the next PR that touches dependencies.
+          npm version "${{ steps.version.outputs.version }}" \
+            --no-git-tag-version --allow-same-version
+          git add app.json package.json package-lock.json
           git commit -m "chore(release): ${{ steps.version.outputs.version }} [skip ci]"
           git tag -a "${{ steps.version.outputs.tag }}" \
             -m "Upande Sensors ${{ steps.version.outputs.version }}"
