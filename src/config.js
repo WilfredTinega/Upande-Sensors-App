@@ -3,6 +3,8 @@
  * buried in the middle of a component.
  */
 
+import Constants from 'expo-constants';
+
 /**
  * Where the app's timezone assumption lives: `src/utils/timezone.js`.
  *
@@ -13,6 +15,21 @@
 
 /** A reading older than this is called out as stale rather than shown as live. */
 export const STALE_AFTER_MINUTES = 120;
+
+/**
+ * Where released APKs come from. The CI pipeline publishes one GitHub Release
+ * per merge to main, with the APK attached — see docs/RELEASING.md.
+ *
+ * Stamped into `expo.extra` at build time from the repository that ran the
+ * workflow, so a build always checks for updates against the repo it came from
+ * rather than one hardcoded here. The literal below is the fallback for local
+ * development, where nothing has stamped anything.
+ */
+export const GITHUB_REPO =
+  Constants.expoConfig?.extra?.githubRepo || 'WilfredTinega/Upande-Sensors-App';
+
+/** Human-facing page, used as the fallback whenever the API cannot be read. */
+export const RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases`;
 
 
 /**

@@ -31,6 +31,9 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
+    "extra": {
+      "githubRepo": "WilfredTinega/Upande-Sensors-App"
+    },
     "plugins": [
       "./plugins/withReleaseSigning",
       "expo-secure-store",

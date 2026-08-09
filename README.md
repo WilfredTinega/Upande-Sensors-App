@@ -73,22 +73,29 @@ For Play Store submission, `eas build -p android --profile production` produces 
 
 ## Pointing at a different ERPNext site
 
-The default backend is set by `DEFAULT_BASE_URL` in [`src/api/client.js`](src/api/client.js).
-It is a plain site address, for example:
+There is no built-in site. A fresh install has no server address at all, and the login screen
+asks for one before it will accept a username — a plain site address, for example:
 
 ```
-https://your-site.example.com
+your-site.example.com
 ```
 
-You do not need to rebuild to change sites, but doing it in-app requires the **System Manager**
+The scheme is optional (`https://` is assumed) and a trailing slash is stripped. The address is
+stored on the device and reused on every later launch, so this is asked exactly once per install.
+
+This is deliberate: a compiled-in default means every fresh install points at whichever customer
+happened to be first, and an installer who forgets to change it signs the wrong farm's staff into
+the wrong instance.
+
+Changing sites afterwards does not need a rebuild, but doing it in-app requires the **System Manager**
 role on the currently connected instance. Sign in, open **Account → Change server**, enter the
 new URL (the scheme is optional; `https://` is assumed and a trailing slash is stripped) and
 confirm. A Frappe session belongs to one site, so switching signs you out; log in again against
 the new server. The chosen URL is stored on the device and reused on the next launch.
 
-The login screen has no *visible* server field — a field user should not be able to repoint the
+Once a site is set the server field disappears — a field user should not be able to repoint the
 app at another instance by accident. There is a deliberate escape hatch for installers:
-**long-press the logo** on the login screen to reveal the server address.
+**long-press the logo** on the login screen to reveal the server address again.
 
 Nobody is authenticated at that point, so no role can be checked — the long press itself is the
 only thing between a field user and a wrong server, which is why it is not a plain button.
@@ -99,8 +106,8 @@ Roles are read from the `Has Role` child table (Frappe's own `frappe.get_roles` 
 whitelisted). If that lookup fails for any reason the app treats the account as unprivileged
 and hides the control, so it is never offered and then refused.
 
-Change `DEFAULT_BASE_URL` if you want a different site to be the out-of-the-box default for
-fresh installs, or to reach an instance no existing System Manager account can log into.
+The long press is also how you reach an instance that no existing System Manager account can log
+into — there is no build-time constant to edit any more.
 
 ## Server timezone — check this when you change sites
 
