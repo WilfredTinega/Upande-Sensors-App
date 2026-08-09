@@ -87,7 +87,9 @@ function findApkAsset(release) {
   return assets.find((a) => typeof a?.name === 'string' && a.name.toLowerCase().endsWith('.apk')) ?? null;
 }
 
-function formatSize(bytes) {
+/** Byte count as MB, or null when the size is unknown. Exported for the
+ *  download progress line, which learns the real size from Content-Length. */
+export function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) return null;
   const mb = bytes / (1024 * 1024);
   return `${mb.toFixed(1)} MB`;
@@ -168,7 +170,8 @@ export async function fetchLatestRelease() {
     // page and let the person see what is actually there.
     downloadUrl: asset?.browser_download_url ?? null,
     assetName: asset?.name ?? null,
-    size: formatSize(asset?.size),
+    size: formatBytes(asset?.size),
+    sizeBytes: asset?.size ?? null,
   };
 }
 
@@ -219,7 +222,10 @@ async function fetchLatestReleaseViaAtom() {
     // away, which beats hiding the button on every rate-limited check.
     downloadUrl: predictedApkUrl(version),
     assetName: `upande_sensors_v${version}.apk`,
+    // Unknown until the download starts — the feed carries no asset metadata,
+    // so the size is filled in from Content-Length once bytes begin arriving.
     size: null,
+    sizeBytes: null,
   };
 }
 

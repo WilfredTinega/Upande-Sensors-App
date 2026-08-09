@@ -7,7 +7,6 @@ import {
   Card,
   Field,
   SectionTitle,
-  SelectField,
   StatusChip,
 } from '../components/ui';
 import { Skeleton } from '../components/Skeleton';
@@ -17,13 +16,15 @@ import { TTL_REFERENCE, cacheKey } from '../api/cache';
 import { normaliseBaseUrl } from '../api/client';
 import { getServerVersions, getUserRoles } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
-import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
-import { UPDATE_ERRORS } from '../api/updates';
-import { downloadAndInstallApk } from '../utils/installApk';
+import { UPDATE_ERRORS, formatBytes } from '../api/updates';
+import {
+  INSTALL_ERRORS,
+  downloadAndInstallApk,
+  openUnknownAppSourcesSettings,
+} from '../utils/installApk';
 import { APP_VERSION, useUpdate } from '../context/UpdateContext';
 import { RELEASES_URL } from '../config';
-import { formatOffset, offsetOptions } from '../utils/timezone';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { font } from '../theme';
 
@@ -71,7 +72,6 @@ function Row({ label, value, muted }) {
 export function SettingsScreen() {
   const t = useTheme();
   const { user, baseUrl, changeServer, biometrics, setBiometricEnabled } = useAuth();
-  const { timezone, setTimezoneMode } = useDashboard();
 
   const [draftUrl, setDraftUrl] = useState(baseUrl);
   const [switching, setSwitching] = useState(false);
@@ -170,9 +170,14 @@ export function SettingsScreen() {
         onProgress: setProgress,
       });
     } catch (err) {
+      // A blocked install is one toggle away from working, so send them there
+      // rather than to a browser that would hit the same wall.
+      const blocked = err?.kind === INSTALL_ERRORS.BLOCKED;
       Alert.alert('Update failed', err?.message ?? 'The update could not be installed.', [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Open in browser', onPress: () => openInBrowser(update?.pageUrl) },
+        blocked
+          ? { text: 'Open settings', onPress: () => openUnknownAppSourcesSettings().catch(() => {}) }
+          : { text: 'Open in browser', onPress: () => openInBrowser(update?.pageUrl) },
       ]);
     } finally {
       setDownloading(false);
@@ -188,13 +193,6 @@ export function SettingsScreen() {
       version: data[key].version || '—',
     }));
   }, [versions.data]);
-
-  const tzSource =
-    timezone.source === 'server'
-      ? `From server${timezone.zoneName ? ` · ${timezone.zoneName}` : ''}`
-      : timezone.source === 'manual'
-        ? 'Set manually'
-        : `From this phone${timezone.zoneName ? ` · ${timezone.zoneName}` : ''}`;
 
   return (
     <ScrollView
@@ -264,45 +262,11 @@ export function SettingsScreen() {
         </View>
       </Card>
 
-      {/* Timezone decides whether a reading counts as stale, so it is a
-          first-class setting rather than a build-time constant. */}
-      <SectionTitle>Time zone</SectionTitle>
-      <Card style={{ marginBottom: spacing.xl }}>
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: spacing.md,
-          }}
-        >
-          <View style={{ flex: 1 }}>
-            <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>
-              Detect automatically
-            </Text>
-            <Text style={[type.caption, { color: t.textSecondary, marginTop: 2 }]}>{tzSource}</Text>
-          </View>
-          <Switch
-            value={timezone.mode === 'auto'}
-            onValueChange={(auto) => setTimezoneMode(auto ? 'auto' : 'manual', timezone.offsetMinutes)}
-            trackColor={{ false: t.surfaceSunken, true: t.accent }}
-            thumbColor={t.surface}
-          />
-        </View>
-
-        {timezone.mode === 'manual' ? (
-          <View style={{ marginTop: spacing.lg }}>
-            <SelectField
-              label="Offset from UTC"
-              value={timezone.offsetMinutes}
-              options={offsetOptions()}
-              onChange={(v) => setTimezoneMode('manual', v)}
-            />
-          </View>
-        ) : (
-          <Row label="Applied to charts" value={formatOffset(timezone.offsetMinutes)} />
-        )}
-      </Card>
+      {/* No timezone card: the offset is resolved automatically — from the
+          server when the account may read System Settings, otherwise from the
+          phone. `setTimezoneMode` and the manual override still exist in
+          DashboardContext and utils/timezone.js for when that needs exposing
+          again; nothing here is the only caller of the resolution itself. */}
 
       {/* Open to everyone: the audit views inside are role-gated and say so,
           but raising an issue is not — hiding the entry would hide the only way
@@ -332,11 +296,6 @@ export function SettingsScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>
                   {isSystemManager ? 'App activity' : 'Issues'}
-                </Text>
-                <Text style={[type.caption, { color: t.textSecondary, marginTop: 2 }]}>
-                  {isSystemManager
-                    ? 'Issues · sign-ins · screen visits'
-                    : 'Problems and requests raised from the app'}
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={17} color={t.textMuted} />
@@ -473,9 +432,9 @@ export function SettingsScreen() {
             <Button
               label={
                 downloading
-                  ? progress === null
+                  ? progress?.fraction == null
                     ? 'Downloading…'
-                    : `Downloading ${Math.round(progress * 100)}%`
+                    : `Downloading ${Math.round(progress.fraction * 100)}%`
                   : `Update to ${update.version}`
               }
               style={{ marginTop: spacing.sm }}
@@ -485,7 +444,7 @@ export function SettingsScreen() {
 
             {/* A determinate bar only once the server has told us the size;
                 before then the button's spinner is the only honest signal. */}
-            {downloading && progress !== null ? (
+            {downloading && progress?.fraction != null ? (
               <View
                 style={{
                   height: 4,
@@ -497,7 +456,7 @@ export function SettingsScreen() {
               >
                 <View
                   style={{
-                    width: `${Math.round(progress * 100)}%`,
+                    width: `${Math.round(progress.fraction * 100)}%`,
                     height: '100%',
                     backgroundColor: t.accent,
                   }}
@@ -505,15 +464,18 @@ export function SettingsScreen() {
               </View>
             ) : null}
 
-            <Text
-              style={[
-                type.caption,
-                { color: t.textMuted, marginTop: spacing.sm, lineHeight: 16 },
-              ]}
-            >
-              Android will ask you to confirm the install. If it refuses, allow this
-              app to install unknown apps and try again.
-            </Text>
+            {downloading && progress ? (
+              <Text
+                style={[
+                  type.caption,
+                  { color: t.textMuted, marginTop: spacing.xs, textAlign: 'right' },
+                ]}
+              >
+                {formatBytes(progress.written) ?? '0.0 MB'}
+                {progress.total ? ` of ${formatBytes(progress.total)}` : ''}
+              </Text>
+            ) : null}
+
           </>
         ) : null}
 
