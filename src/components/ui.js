@@ -266,7 +266,7 @@ export function SelectField({
         <Text
           numberOfLines={1}
           style={[
-            variant === 'bare' ? type.caption : type.body,
+            type.body,
             {
               color: variant === 'bare' ? t.accent : selected ? t.textPrimary : t.textMuted,
               fontWeight: variant === 'bare' ? '600' : '400',
@@ -278,7 +278,8 @@ export function SelectField({
         >
           {selected?.label || (allowClear && !value ? clearLabel : placeholder)}
         </Text>
-        <Text style={{ color: variant === 'bare' ? t.accent : t.textMuted, fontSize: 10 }}>▼</Text>
+        {/* Scaled with the label so the caret does not shrink away beside it. */}
+        <Text style={{ color: variant === 'bare' ? t.accent : t.textMuted, fontSize: variant === 'bare' ? 12 : 10 }}>▼</Text>
       </Pressable>
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>

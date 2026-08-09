@@ -14,28 +14,58 @@
  */
 
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
 
 /** FLAG_GRANT_READ_URI_PERMISSION — without it the installer cannot read the file. */
 const FLAG_GRANT_READ_URI_PERMISSION = 1;
 
+const VIEW_ACTION = 'android.intent.action.VIEW';
 const INSTALL_ACTION = 'android.intent.action.INSTALL_PACKAGE';
+const UNKNOWN_SOURCES_SETTINGS = 'android.settings.MANAGE_UNKNOWN_APP_SOURCES';
 const APK_MIME = 'application/vnd.android.package-archive';
 
+export const INSTALL_ERRORS = {
+  DOWNLOAD: 'download',
+  /** Almost always "Install unknown apps" being off for this app. */
+  BLOCKED: 'blocked',
+  FAILED: 'failed',
+};
+
 export class InstallError extends Error {
-  constructor(message, { cause } = {}) {
+  constructor(message, { kind = INSTALL_ERRORS.FAILED, cause } = {}) {
     super(message);
     this.name = 'InstallError';
+    this.kind = kind;
     this.cause = cause;
   }
 }
 
 /**
+ * Open the per-app "Install unknown apps" screen.
+ *
+ * Android grants that permission per installing-app, and there is no way to
+ * request it with a dialog — the user has to toggle it in Settings, so the most
+ * we can do is land them on the right screen.
+ */
+export async function openUnknownAppSourcesSettings() {
+  const pkg = Constants.expoConfig?.android?.package;
+  await IntentLauncher.startActivityAsync(
+    UNKNOWN_SOURCES_SETTINGS,
+    pkg ? { data: `package:${pkg}` } : {},
+  );
+}
+
+/**
  * Download `url` and open the system installer for it.
  *
- * `onProgress` receives 0..1, or null when the server sends no Content-Length
- * (the UI shows an indeterminate state rather than a bar stuck at zero).
+ * `onProgress` receives `{ fraction, written, total }`. `fraction` and `total`
+ * are null when the server sends no Content-Length, so the UI can show an
+ * indeterminate state rather than a bar stuck at zero — `written` is always
+ * real, which is why it is reported separately rather than folded into a
+ * percentage.
+ *
  * Resolves once the installer has been launched — Android owns the flow from
  * that point, and there is no callback for whether the user accepted.
  */
@@ -56,12 +86,18 @@ export async function downloadAndInstallApk(url, { fileName, onProgress } = {}) 
   try {
     const download = FileSystem.createDownloadResumable(url, target, {}, (progress) => {
       if (!onProgress) return;
-      const total = progress.totalBytesExpectedToWrite;
-      onProgress(total > 0 ? progress.totalBytesWritten / total : null);
+      const written = progress.totalBytesWritten;
+      // Android reports -1 for a response with no Content-Length; treating that
+      // as a total would render "0.0 MB" and a bar that never moves.
+      const total = progress.totalBytesExpectedToWrite > 0
+        ? progress.totalBytesExpectedToWrite
+        : null;
+      onProgress({ fraction: total ? written / total : null, written, total });
     });
     result = await download.downloadAsync();
   } catch (err) {
     throw new InstallError('The download failed. Check your connection and try again.', {
+      kind: INSTALL_ERRORS.DOWNLOAD,
       cause: err,
     });
   }
@@ -87,21 +123,29 @@ export async function downloadAndInstallApk(url, { fileName, onProgress } = {}) 
     throw new InstallError('Could not prepare the update for installation.', { cause: err });
   }
 
-  try {
-    await IntentLauncher.startActivityAsync(INSTALL_ACTION, {
-      data: contentUri,
-      flags: FLAG_GRANT_READ_URI_PERMISSION,
-      type: APK_MIME,
-    });
-  } catch (err) {
-    // The usual cause is "Install unknown apps" being off for this app. Android
-    // shows that settings prompt itself when it can; when it cannot, the intent
-    // simply fails and the user needs telling why.
-    throw new InstallError(
-      'Android would not open the installer. Allow this app to install unknown apps in Settings, then try again.',
-      { cause: err },
-    );
+  // ACTION_VIEW first: it is the path a browser or file manager takes when you
+  // tap a downloaded APK, so it is the one guaranteed to have a handler.
+  // ACTION_INSTALL_PACKAGE has been deprecated since Android 10 and is kept
+  // only as a fallback for devices whose launcher does not resolve the former.
+  const attempts = [VIEW_ACTION, INSTALL_ACTION];
+  let lastError;
+  for (const action of attempts) {
+    try {
+      await IntentLauncher.startActivityAsync(action, {
+        data: contentUri,
+        type: APK_MIME,
+        flags: FLAG_GRANT_READ_URI_PERMISSION,
+      });
+      return { uri: result.uri, size: info.size };
+    } catch (err) {
+      lastError = err;
+    }
   }
 
-  return { uri: result.uri, size: info.size };
+  // Both actions failing points at the permission rather than the intent: with
+  // "Install unknown apps" off, Android refuses before any installer appears.
+  throw new InstallError(
+    'Android would not open the installer. Allow this app to install unknown apps, then try again.',
+    { kind: INSTALL_ERRORS.BLOCKED, cause: lastError },
+  );
 }

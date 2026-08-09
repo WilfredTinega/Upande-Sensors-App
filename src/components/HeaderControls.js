@@ -47,7 +47,9 @@ export function HeaderSiteFilter() {
         alignItems: 'flex-end',
         justifyContent: 'center',
         alignSelf: 'stretch',
-        maxWidth: 190,
+        // Sized for the longest site name in use ("Kuehne Nagel KN1 & KN2") at
+        // the filter's 14px weight-600 face; below this it ellipsises.
+        maxWidth: 220,
         paddingRight: spacing.lg,
       }}
     >
