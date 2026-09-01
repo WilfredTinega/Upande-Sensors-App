@@ -3,6 +3,13 @@
     "name": "Upande Sensors",
     "slug": "upande-sensors",
     "version": "1.0.0",
+    "runtimeVersion": "1.0",
+    "updates": {
+      "enabled": true,
+      "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/1.0/manifest.json",
+      "checkAutomatically": "NEVER",
+      "fallbackToCacheTimeout": 0
+    },
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",

@@ -9,8 +9,9 @@ import React, {
 } from 'react';
 import { AppState } from 'react-native';
 import Constants from 'expo-constants';
+import * as Updates from 'expo-updates';
 
-import { autoCheckForUpdate, checkForUpdate, UPDATE_ERRORS } from '../api/updates';
+import { autoCheckForUpdate, checkForUpdate, UPDATE_ERRORS, UPDATE_KINDS } from '../api/updates';
 import { downloadApk, launchInstaller } from '../utils/installApk';
 
 /**
@@ -124,10 +125,33 @@ export function UpdateProvider({ children }) {
    * Returns whether the installer was reached, not whether the user accepted —
    * Android owns the flow from that point and offers no callback.
    */
+  /**
+   * Apply a same-runtime update as a JavaScript bundle.
+   *
+   * A patch release cannot contain native changes — that is what the runtime
+   * boundary means — so it arrives as a bundle of a megabyte or so instead of a
+   * 74MB APK, and there is no installer and no reinstall. `reloadAsync` restarts
+   * into it.
+   *
+   * Returns false rather than throwing when this route is unavailable: in Expo
+   * Go and in development `Updates.isEnabled` is false, and a runtime with
+   * nothing published yet simply has no update. Both are ordinary, and the
+   * caller falls back to the APK.
+   */
+  const applyJsUpdate = useCallback(async () => {
+    if (!Updates.isEnabled) return false;
+    const found = await Updates.checkForUpdateAsync();
+    if (!found?.isAvailable) return false;
+    await Updates.fetchUpdateAsync();
+    // Everything after this is on the other side of a restart.
+    await Updates.reloadAsync();
+    return true;
+  }, []);
+
   const install = useCallback(
     async (target, { auto = false } = {}) => {
       const release = target || update;
-      if (!release?.available || !release?.downloadUrl) return false;
+      if (!release?.available) return false;
       // One download at a time, whoever asked.
       if (busy.current) return false;
 
@@ -141,6 +165,27 @@ export function UpdateProvider({ children }) {
       setProgress(null);
       setInstallError(null);
       try {
+        /**
+         * The fast path, tried first for anything inside the same runtime.
+         *
+         * If it succeeds the app has already restarted and nothing below runs.
+         * If it declines — no bundle published, or updates disabled in this
+         * build — the APK is still there as the answer, so choosing the fast
+         * path can never cost the user the update.
+         */
+        if (release.kind === UPDATE_KINDS.JS && (await applyJsUpdate())) {
+          return true;
+        }
+
+        if (!release.downloadUrl) {
+          setInstallError({
+            kind: null,
+            message: 'This release has no download attached to it.',
+            auto,
+          });
+          return false;
+        }
+
         const file = await downloadApk(release.downloadUrl, {
           fileName: release.assetName,
           onProgress: setProgress,
@@ -168,7 +213,7 @@ export function UpdateProvider({ children }) {
         setProgress(null);
       }
     },
-    [update],
+    [update, applyJsUpdate],
   );
 
   /**
@@ -188,7 +233,10 @@ export function UpdateProvider({ children }) {
    */
   useEffect(() => {
     if (typeof __DEV__ !== 'undefined' && __DEV__) return;
-    if (!update?.available || !update?.downloadUrl) return;
+    if (!update?.available) return;
+    // A native update with no APK attached has nothing to fetch; a JS one does
+    // not need an APK at all.
+    if (update.kind !== UPDATE_KINDS.JS && !update.downloadUrl) return;
     install(update, { auto: true });
   }, [update, install]);
 

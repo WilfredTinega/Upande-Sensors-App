@@ -148,6 +148,16 @@ function nextVersion(current, bump = 'patch') {
  * limits are fixed, the version *is* a counter in disguise — just read it back
  * out. No external state, and it never collides or goes backwards.
  */
+/**
+ * The runtime a version belongs to: everything sharing `major.minor` can accept
+ * the same JS bundle. Mirrors `runtimeVersionOf` in src/api/updates.js, which
+ * is the app-side reader of the same rule.
+ */
+function runtimeVersionFor(version) {
+  const { major, minor } = parseVersion(version);
+  return `${major}.${minor}`;
+}
+
 function versionCodeFor(version) {
   const { major, minor, patch } = parseVersion(version);
   return (major * MINOR_LIMIT + minor) * PATCH_LIMIT + patch;
@@ -214,6 +224,38 @@ const versionCode = versionCodeFor(version);
 if (hasFlag('apply')) {
   appConfig.expo.version = version;
   appConfig.expo.android = { ...appConfig.expo.android, versionCode };
+  /**
+   * The compatibility gate for over-the-air updates, kept in step with the
+   * version by the same command that sets it.
+   *
+   * `major.minor` is already what this odometer means: a normal merge bumps the
+   * patch, and `--bump minor` is the deliberate "something native changed"
+   * signal. Writing that pair as `runtimeVersion` makes the rule enforceable
+   * rather than merely documented — `expo-updates` refuses a bundle whose
+   * runtime does not match the installed build, so a 1.1.0 device can never be
+   * handed a 1.0.x JS bundle, and a 1.0.x device is told to fetch the APK.
+   *
+   * Set even before an update server exists: it costs nothing, and it must
+   * already be correct in the build that is running when one is turned on.
+   */
+  const runtime = runtimeVersionFor(version);
+  appConfig.expo.runtimeVersion = runtime;
+  /**
+   * The update URL carries the runtime, and that is what makes a static host
+   * viable at all.
+   *
+   * The Expo Updates protocol sends the runtime as a *request header*, which no
+   * static file server can vary a response on. But `updates.url` is baked into
+   * each build — so a 1.0.x APK only ever asks for the 1.0 manifest, and a 1.1
+   * build only ever asks for 1.1. The gate moves from the server to the URL,
+   * and it becomes physically impossible to hand a 1.0 device a 1.1 bundle.
+   */
+  if (appConfig.expo.updates?.url) {
+    appConfig.expo.updates.url = appConfig.expo.updates.url.replace(
+      /\/ota\/android\/[^/]+\/manifest\.json$/,
+      `/ota/android/${runtime}/manifest.json`,
+    );
+  }
   writeFileSync(APP_JSON, `${JSON.stringify(appConfig, null, 2)}\n`);
 
   pkg.version = version;
@@ -229,6 +271,7 @@ if (hasFlag('notes')) {
         current: currentVersion,
         version,
         versionCode,
+        runtimeVersion: runtimeVersionFor(version),
         bump,
         tag: `v${version}`,
         previousTag: tag,
