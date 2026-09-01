@@ -17,7 +17,7 @@ import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { isStale, relativeTime } from '../utils/dates';
-import { shortMeasureLabel, sortByMeasure } from '../utils/measures';
+import { sortByMeasure } from '../utils/measures';
 
 /** One physical node, with every parameter it reports. */
 function SensorCard({ sensor, live, unitForType, pending }) {
@@ -97,10 +97,7 @@ function SensorCard({ sensor, live, unitForType, pending }) {
             return (
               <View key={`${param.type || 'value'}-${i}`} style={{ minWidth: 76 }}>
                 <Text numberOfLines={1} style={[type.caption, { color: t.textSecondary }]}>
-                  {/* Same short forms as the chart tiles — these sit three and
-                      four to a row on a sensor card, where "Soil Temperature"
-                      is what pushes the row onto a second line. */}
-                  {shortMeasureLabel(param.type) || 'Reading'}
+                  {param.type || 'Reading'}
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 3 }}>
                   <Text

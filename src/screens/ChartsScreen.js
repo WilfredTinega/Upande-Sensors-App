@@ -18,7 +18,6 @@ import {
   isMeasured,
   measuredValues,
   measuresFromLive,
-  shortMeasureLabel,
   sortByMeasure,
   withDerivedMeasures,
 } from '../utils/measures';
@@ -33,6 +32,13 @@ import { RANGES, fullTimestamp, rangeToDates, trimFutureSeries } from '../utils/
 const BUCKET_MINS = 20;
 
 /** Stable empty result, so an empty chart doesn't re-render on every pass. */
+/**
+ * Wide enough for the longest measure name — "Soil Temperature" — so no tile
+ * ever truncates its own label, and flexible so a row that fits divides the
+ * width evenly instead of leaving a gap on the right.
+ */
+const TILE_WIDTH = { flex: 1, minWidth: 116 };
+
 const EMPTY_TREND = { labels: [], series: [] };
 
 export function ChartsScreen() {
@@ -349,12 +355,28 @@ export function ChartsScreen() {
                 {sensorName ? `${site} · ${sensorName}` : site}
               </Text>
 
-              <View
-                style={{
+              {/*
+                One line, always — and it scrolls rather than shrinking.
+
+                The tiles are a comparable set, so a stray fourth on its own row
+                reads as a different kind of thing. But squeezing them to fit
+                cost the labels: "Soil Temperature" ellipsed to "Soil Temper…",
+                which reads as a different measure rather than a shortened one.
+
+                `flexGrow: 1` on the content with `flex: 1` on each tile gives
+                both behaviours from one layout: while they fit, they divide the
+                width evenly and nothing scrolls; once their minimum widths
+                exceed it, the row becomes scrollable and every name stays whole.
+              */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                // The chart below owns vertical panning; without this the row
+                // can intercept a scroll meant for the page.
+                directionalLockEnabled
+                contentContainerStyle={{
                   flexDirection: 'row',
-                  // One line, always. The tiles are a comparable set; a stray
-                  // fourth on its own row reads as a different kind of thing.
-                  flexWrap: 'nowrap',
+                  flexGrow: 1,
                   gap: spacing.sm,
                   padding: spacing.lg,
                   paddingBottom: 0,
@@ -367,21 +389,25 @@ export function ChartsScreen() {
                       value={stats[0]?.latest === null ? null : formatTick(stats[0].latest)}
                       unit={stats[0]?.unit}
                       accent={stats[0]?.color}
+                      style={TILE_WIDTH}
                     />
                     <StatTile
                       label="Average"
                       value={stats[0]?.average === null ? null : formatTick(stats[0].average)}
                       unit={stats[0]?.unit}
+                      style={TILE_WIDTH}
                     />
                     <StatTile
                       label="Min"
                       value={stats[0]?.min === undefined ? null : formatTick(stats[0].min)}
                       unit={stats[0]?.unit}
+                      style={TILE_WIDTH}
                     />
                     <StatTile
                       label="Max"
                       value={stats[0]?.max === undefined ? null : formatTick(stats[0].max)}
                       unit={stats[0]?.unit}
+                      style={TILE_WIDTH}
                     />
                   </>
                 ) : (
@@ -410,10 +436,10 @@ export function ChartsScreen() {
                       // wraps: the earlier flexGrow/flexBasis pair existed to
                       // keep a wrapping row's height computable, and with
                       // `nowrap` it would instead push the tiles past the edge.
-                      style={{ flex: 1, minWidth: 0 }}
+                      style={TILE_WIDTH}
                     >
                       <StatTile
-                        label={shortMeasureLabel(s.label)}
+                        label={s.label}
                         value={s.latest === null ? null : formatTick(s.latest)}
                         unit={s.unit}
                         accent={s.color}
@@ -425,7 +451,7 @@ export function ChartsScreen() {
                     </Pressable>
                   ))
                 )}
-              </View>
+              </ScrollView>
 
               <View
                 style={{

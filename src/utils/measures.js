@@ -82,32 +82,6 @@ export function measuredValues(values = []) {
 const MAGNUS_A = 17.625;
 const MAGNUS_B = 243.04;
 
-/**
- * Short forms for the stat tiles.
- *
- * The tiles sit four or five to a row and never wrap, so the label is the first
- * thing to run out of room — "Soil Temperature" ellipses to "Soil Temper…",
- * which reads as a different measure rather than a shortened one. These are the
- * names people use out loud anyway.
- *
- * Only for the tiles. The chart legend, the axis and the pickers keep the full
- * name, where there is room for it and where an unfamiliar reader needs it.
- */
-const SHORT_MEASURE_LABELS = {
-  temperature: 'Temp',
-  'soil temperature': 'Soil Temp',
-  'soil moisture': 'Soil Moist',
-  humidity: 'Humidity',
-  'dew point': 'Dew Point',
-  precipitation: 'Rain',
-};
-
-/** The tile form of a measure name, or the name itself when it is short enough. */
-export function shortMeasureLabel(label) {
-  const key = String(label || '').trim().toLowerCase();
-  return SHORT_MEASURE_LABELS[key] || label;
-}
-
 export const DEW_POINT = 'Dew Point';
 export const DELTA_T = 'ΔT';
 

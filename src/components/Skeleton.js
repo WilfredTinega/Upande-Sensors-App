@@ -147,14 +147,16 @@ export function SkeletonChart({ height = 240, style }) {
 /**
  * A row of stat tiles, as used above the Readings list.
  *
- * `nowrap` and `minWidth: 0` mirror the real `StatTile`: a skeleton that wraps
- * where the content will not makes the layout jump as data arrives.
+ * Mirrors the real tile row: one line, each tile at the same minimum width, so
+ * the layout does not jump as data arrives. It does not scroll — a skeleton
+ * offers nothing to reach by scrolling — it just clips at the edge like the
+ * loaded row does before you drag it.
  */
 export function SkeletonStatTiles({ count = 6, style }) {
   return (
-    <View style={[{ flexDirection: 'row', flexWrap: 'nowrap', gap: spacing.sm }, style]}>
+    <View style={[{ flexDirection: 'row', flexWrap: 'nowrap', overflow: 'hidden', gap: spacing.sm }, style]}>
       {Array.from({ length: count }).map((_, i) => (
-        <SkeletonSurface key={i} style={{ flex: 1, minWidth: 0, padding: spacing.md }}>
+        <SkeletonSurface key={i} style={{ flex: 1, minWidth: 116, padding: spacing.md }}>
           <Skeleton width="75%" height={10} />
           <Skeleton width="55%" height={20} style={{ marginTop: 6 }} />
         </SkeletonSurface>
