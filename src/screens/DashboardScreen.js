@@ -5,7 +5,14 @@ import { Card, EmptyState, ErrorView, StatusChip } from '../components/ui';
 import { Skeleton, SkeletonSensorCard } from '../components/Skeleton';
 import { formatTick } from '../components/LineChart';
 import { TTL_LIVE, TTL_REFERENCE, invalidate } from '../api/cache';
-import { liveKey, loadLiveValues, loadSiteSensors, sensorsKey, valuesKey } from '../api/liveSite';
+import {
+  liveKey,
+  loadLiveValues,
+  loadSiteSensors,
+  sensorsKey,
+  siteKey,
+  valuesKey,
+} from '../api/liveSite';
 import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
@@ -230,7 +237,10 @@ export function DashboardScreen() {
   const refresh = useCallback(() => {
     if (!site) return Promise.resolve();
     // The values are what a refresh is for; the sensor list is near-static and
-    // re-fetching it would double the cost of every pull.
+    // re-fetching it would double the cost of every pull. `siteKey` is the
+    // shared request both halves are served from — leaving it cached would hand
+    // the same payload back and the pull would fetch nothing.
+    invalidate(siteKey(site));
     invalidate(valuesKey(site));
     invalidate(liveKey(site));
     return values.refresh();

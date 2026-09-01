@@ -39,3 +39,13 @@ export const RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases`;
  */
 export const CLOCK_SKEW_TOLERANCE_MINUTES = 10;
 
+/**
+ * Sites offered as one-tap suggestions on the server form.
+ *
+ * NOT a default. `client.js` deliberately starts with no server at all: a
+ * hardcoded address means every fresh install points at one customer's instance
+ * until somebody changes it, and an installer who forgets is signing in against
+ * the wrong farm. A suggestion still has to be tapped, so the choice stays
+ * explicit — it only saves typing the address that is right almost every time.
+ */
+export const SUGGESTED_SITES = ['sensor.upande.com'];

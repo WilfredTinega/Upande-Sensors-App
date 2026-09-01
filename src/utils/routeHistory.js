@@ -1,7 +1,7 @@
 import { AppState } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 
-import { insertRouteHistory, queueRouteHistory } from '../api/endpoints';
+import { logRoutes, queueRouteHistory } from '../api/endpoints';
 import { getServerOffsetMinutes } from './timezone';
 
 /**
@@ -17,23 +17,24 @@ import { getServerOffsetMinutes } from './timezone';
  * minute carries the same visits at a fraction of the cost, and nothing on
  * screen is waiting on it.
  *
- * What batching does cost is timing. `Document.set_user_and_timestamp` assigns
- * `creation = now()` to every new document, so the timestamp this app sends is
- * discarded and a whole batch lands stamped with the moment it was written —
- * up to a minute after the visits happened, and identical across the batch.
- * That is true of Frappe's own `deferred_insert` too, where the delay is the
- * scheduler's 15 minutes rather than our 60 seconds. The visit time is still
- * sent, so a site that ever honours it gets the real figure, but nothing here
- * should be read as a per-second record of when a screen was opened.
+ * Batching used to cost timing, and no longer does.
+ * `Document.set_user_and_timestamp` assigns `creation = now()` to every new
+ * document, so the timestamp sent from here was discarded and a whole batch
+ * landed stamped with the moment it was written — up to a minute after the
+ * visits happened, and identical across the batch. The server script writes each
+ * row's real visit time back after the insert, so what is recorded is when the
+ * screen was opened rather than when the batch was flushed.
  *
  * The framework's own route is `deferred_insert`, which pushes to a Redis queue
  * that `frappe.deferred_insert.save_to_db` drains on a 15-minute cron. On this
  * instance that scheduler stopped, and every account except Administrator
  * silently stopped being recorded — the visits were accepted, queued, and never
- * written. It is kept here strictly as a fallback, because a direct insert
- * needs `create` on Route History and that doctype grants it to no role by
- * default. Whichever route is in use is reported by `getRecordingStatus`, so a
- * site running on the fallback is visible rather than guessed at.
+ * written. It is kept here strictly as a fallback, for a site that has not had
+ * `upande_sensors_app.log_routes` deployed: a direct insert through the generic
+ * API needs `create` on Route History, and that doctype grants it to no role by
+ * default, which is why the fallback existed in the first place. Whichever route
+ * is in use is reported by `getRecordingStatus`, so a site running on the
+ * fallback is visible rather than guessed at.
  *
  * Delivery is the part this file has to get right. A visit that fails to send
  * is kept and retried, survives the app being backgrounded or killed, and is
@@ -76,13 +77,6 @@ const STORE = 'route-history-pending.json';
  */
 let status = { sentAt: null, sentCount: 0, error: null, pending: 0, via: null };
 
-/**
- * The account these visits belong to, for the `user` field.
- *
- * A direct insert has to say who the visit was by; only `deferred_insert` fills
- * that in from the session.
- */
-let sessionUser = null;
 
 /**
  * When the direct insert was last refused for want of permission.
@@ -192,11 +186,16 @@ function scheduleRetry() {
 async function send(batch) {
   if (directAllowed()) {
     try {
-      await insertRouteHistory(batch, sessionUser);
+      await logRoutes(batch);
       directRefusedAt = 0;
       return 'direct';
     } catch (err) {
-      if (!err?.isPermission) throw err;
+      // A permission refusal, or an instance without the script deployed at all
+      // — either way the direct route is unavailable here and the queue is the
+      // only thing left. Anything else is a transient failure and is rethrown,
+      // so the batch stays queued and is retried rather than being quietly
+      // diverted onto a slower path that might not be needed.
+      if (!err?.isPermission && !err?.isMissingEndpoint) throw err;
       directRefusedAt = Date.now();
     }
   }
@@ -270,7 +269,11 @@ export function recordRoute(route) {
 
 /** Start recording once signed in; stop on sign-out. */
 export function setRouteHistoryEnabled(next, user) {
-  if (next) sessionUser = user || sessionUser;
+  // `user` is accepted for call-site compatibility and no longer sent: both
+  // write paths attribute the visit to the session account server-side, so a
+  // value passed from here could only ever disagree with the session it was
+  // written under.
+  void user;
   if (next === enabled) return;
   enabled = next;
 

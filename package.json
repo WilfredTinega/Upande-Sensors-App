@@ -36,7 +36,10 @@
     "version:next": "node scripts/version.mjs",
     "version:apply": "node scripts/version.mjs --apply",
     "version:notes": "node scripts/version.mjs --notes",
-    "build:apk": "npm run prebuild && cd android && ./gradlew assembleRelease"
+    "build:apk": "npm run prebuild && cd android && ./gradlew assembleRelease",
+    "server:deploy": "node server/deploy.mjs",
+    "server:deploy:dry": "node server/deploy.mjs --dry-run",
+    "server:verify": "node server/deploy.mjs --verify"
   },
   "devDependencies": {
     "eslint": "^9.39.5",

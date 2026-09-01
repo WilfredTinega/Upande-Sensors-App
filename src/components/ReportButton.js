@@ -15,15 +15,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { captureScreen } from 'react-native-view-shot';
 
 import { Button, Field, Segmented, SelectField } from './ui';
-import {
-  ISSUE_KINDS,
-  assignIssue,
-  attachScreenshot,
-  createIssue,
-  searchUsers,
-} from '../api/endpoints';
+import { ISSUE_KINDS, searchUsers, submitReport } from '../api/endpoints';
 import { invalidate } from '../api/cache';
-import { useAuth } from '../context/AuthContext';
 import { useCurrentRoute } from '../navigation/ref';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { font } from '../theme';
@@ -37,7 +30,6 @@ import { font } from '../theme';
  */
 export function ReportButton() {
   const t = useTheme();
-  const { user } = useAuth();
   const route = useCurrentRoute();
 
   const [open, setOpen] = useState(false);
@@ -129,41 +121,35 @@ export function ReportButton() {
     setError(null);
 
     try {
-      // The screen name is recorded for you: "it broke" is far more useful with
-      // the page attached to it.
-      const created = await createIssue({
+      /**
+       * One request files the report, assigns it and attaches the screenshot.
+       *
+       * These were three sequential calls, and the two follow-ups could each
+       * fail on their own against a report that was already filed — which is
+       * why the confirmation used to carry qualifications. Now they either all
+       * land or the report is not filed at all, so there is nothing to qualify.
+       *
+       * The screen name is recorded for you: "it broke" is far more useful with
+       * the page attached to it.
+       */
+      const created = await submitReport({
         subject,
         description: [details.trim(), route ? `Screen: ${route}` : null]
           .filter(Boolean)
           .join('\n\n'),
         kind,
-        user: user?.name,
+        assignee,
+        screenshot: includeShot && shot ? shot : null,
       });
 
       const name = created?.name;
-
-      /**
-       * Assignment and the screenshot are follow-up calls, and each can fail on
-       * its own. Neither undoes a report that is already filed, so they are
-       * reported as qualifications on the confirmation rather than as errors —
-       * the alternative is telling someone their report failed when it didn't.
-       */
       const notes = [];
-
-      if (name && assignee) {
-        try {
-          await assignIssue({ issueName: name, user: assignee, description: subject.trim() });
-        } catch {
-          notes.push(`could not be assigned to ${assignee}`);
-        }
-      }
-
-      if (name && includeShot && shot) {
-        try {
-          await attachScreenshot({ issueName: name, base64: shot });
-        } catch {
-          notes.push('screenshot could not be attached');
-        }
+      // The server reports what it actually did, so a screenshot or an
+      // assignment that was asked for and did not land is still named rather
+      // than passed off as done.
+      if (assignee && !created?.assigned_to) notes.push(`could not be assigned to ${assignee}`);
+      if (includeShot && shot && !created?.attachment) {
+        notes.push('screenshot could not be attached');
       }
 
       setSent(notes.length ? `${name} — ${notes.join('; ')}` : name || 'Submitted');

@@ -15,6 +15,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { Button, Field } from '../components/ui';
+import { SUGGESTED_SITES } from '../config';
+import { normaliseBaseUrl } from '../api/client';
 import { PoweredBy } from '../components/PoweredBy';
 import { useAuth } from '../context/AuthContext';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
@@ -319,6 +321,39 @@ export function LoginScreen() {
               keyboardType="url"
               placeholder="your-site.example.com"
             />
+
+            {/* Suggestions, not a default: the address still has to be chosen,
+                which is the point — see SUGGESTED_SITES in src/config.js. Hidden
+                once the field says one of them, where the chip would only
+                restate what is already typed. */}
+            {SUGGESTED_SITES.some((s) => normaliseBaseUrl(s) !== normaliseBaseUrl(draftUrl)) ? (
+              <View
+                style={{
+                  flexDirection: 'row',
+                  flexWrap: 'wrap',
+                  gap: spacing.sm,
+                  marginBottom: spacing.md,
+                }}
+              >
+                {SUGGESTED_SITES.filter(
+                  (s) => normaliseBaseUrl(s) !== normaliseBaseUrl(draftUrl),
+                ).map((site) => (
+                  <Pressable
+                    key={site}
+                    onPress={() => setDraftUrl(site)}
+                    style={{
+                      borderWidth: StyleSheet.hairlineWidth,
+                      borderColor: t.borderStrong,
+                      borderRadius: radius.pill,
+                      paddingVertical: spacing.xs,
+                      paddingHorizontal: spacing.md,
+                    }}
+                  >
+                    <Text style={[type.caption, { color: t.textSecondary }]}>{site}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
 
             <View style={{ flexDirection: 'row', gap: spacing.sm }}>
               {/* No Cancel on a fresh install: there is nothing to go back to,

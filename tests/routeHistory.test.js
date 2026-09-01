@@ -58,11 +58,13 @@ class Perm extends Error {
     return true;
   }
 }
-const insertRouteHistory = async (batch, user) => {
+const logRoutes = async (batch) => {
   if (mode === 'forbidden') throw new Perm('not permitted');
   if (mode === 'down') throw new Error('network down');
   requests.push(batch.length);
-  direct.push(...batch.map((r) => ({ ...r, user })));
+  // The endpoint stamps the account from the session, so the client sends the
+  // route and its visit time and nothing else.
+  direct.push(...batch.map((r) => ({ ...r })));
 };
 const queueRouteHistory = async (batch) => {
   if (mode === 'down') throw new Error('network down');
@@ -93,7 +95,10 @@ const check = (name, ok) => {
   await sleep(300);
   check('one bulk request on the tick', requests.length === 1 && requests[0] === 4);
   check('every visit delivered', direct.length === 4);
-  check('rows carry the signed-in account', direct.every((r) => r.user === 'jane@upande.com'));
+  check(
+    'rows carry the visit time, not the flush time',
+    direct.every((r) => typeof r.creation === 'string' && r.creation.length >= 19),
+  );
   check('queue emptied and disk cleared', getRecordingStatus().pending === 0 && disk === null);
 
   const idle = requests.length;

@@ -393,6 +393,10 @@ export function DashboardProvider({ children }) {
   const refreshReference = useCallback(async () => {
     invalidate('user_sites');
     invalidate('dashboard_config');
+    // Both of the above are served from one consolidated request; without
+    // dropping it too, `refresh()` forces the outer keys and is then handed the
+    // memoised payload back, so a refresh would fetch nothing.
+    invalidate('app_config');
     await Promise.all([sitesQuery.refresh(), configQuery.refresh()]);
   }, [sitesQuery, configQuery]);
 
