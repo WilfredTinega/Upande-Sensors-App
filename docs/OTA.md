@@ -92,3 +92,44 @@ never cost anyone the update.
   no device has fetched one yet. Verify on a real build before relying on it: if
   the client rejects a plain-JSON manifest and insists on `multipart/mixed`, the
   fix is a small redirect worker in front of Pages, not a change to any of this.
+
+## Build cost
+
+`expo-updates` brought six more native modules with it, and the release build
+tipped past Gradle's default heap:
+
+```
+The Daemon will expire after the build after running out of JVM Metaspace.
+> Task :app:packageRelease FAILED
+```
+
+The template's default is `-Xmx512m -XX:MaxMetaspaceSize=256m`, and Metaspace —
+class metadata — is the one that ran out. `plugins/withBuildTuning.js` raises
+both on every prebuild, since `android/` is regenerated each CI run and cannot
+just hold an edited `gradle.properties`.
+
+### Real devices only
+
+The template builds four architectures and each carries its own copy of every
+native library — Hermes, the RN runtime, expo-modules-core, screens, svg. That is
+what made the release APK 74MB.
+
+`plugins/withBuildTuning.js` now pins:
+
+```
+reactNativeArchitectures=armeabi-v7a,arm64-v8a
+```
+
+`x86`/`x86_64` were emulator-only and no device in the field runs either, so they
+were paying for themselves twice: once in every download and once in the build's
+memory and wall-clock. `armeabi-v7a` stays — it is 32-bit ARM, which is what
+older and cheaper handsets run, and this app goes to farms rather than to a fleet
+of recent phones.
+
+**The trade:** the APK no longer installs on an Android emulator. For that, lift
+the filter for the one run:
+
+```sh
+npm run android:emulator      # expo run:android -- -PreactNativeArchitectures=x86_64
+```
+
