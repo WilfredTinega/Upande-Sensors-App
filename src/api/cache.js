@@ -18,6 +18,7 @@
 
 const store = new Map(); // key -> { data, expires }
 const inflight = new Map(); // key -> Promise
+const entering = new Set(); // keys inside the synchronous span of their loader
 
 /** Reference data: changes when an admin edits Sensor Settings, so minutes. */
 export const TTL_REFERENCE = 10 * 60 * 1000;
@@ -43,6 +44,41 @@ export function cacheKey(name, params = {}) {
  * is already running.
  */
 export function cached(key, loader, { ttl = TTL_SERIES, force = false } = {}) {
+  /**
+   * Re-entrancy guard. Without it, this function can hang forever.
+   *
+   * `inflight.set(key, …)` happens synchronously, before the loader runs in a
+   * microtask. So if that loader asks for its OWN key — which is what
+   * `useQuery(sensorsKey(site), () => loadSiteSensors(site))` did, because
+   * `loadSiteSensors` cached under the same key — the inner call is handed the
+   * outer promise, and the outer promise ends up waiting on itself. It never
+   * settles, the loader is never reached, and no request is ever made: a screen
+   * that skeletons forever with nothing in the network log to explain it.
+   *
+   * `entering` is held ONLY for the synchronous span of the loader's
+   * invocation, which is precisely when a nested same-key call can be made from
+   * inside it. Marking the whole in-flight window instead — the obvious version
+   * of this guard — misreads an ordinary second consumer as a cycle and issues
+   * it a duplicate request, which is the opposite of what this cache is for. A
+   * device log caught exactly that: two `whoami` requests and a spurious
+   * warning, because the Account screen asked while sign-in's ask was open.
+   *
+   * Running the loader uncached is the right answer for a genuine cycle. It is
+   * one duplicate request in a situation that would otherwise produce none at
+   * all, ever.
+   */
+  if (entering.has(key)) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.warn(
+        `[cache] re-entrant load of "${key}" — a loader asked for its own key. ` +
+          'Served uncached; give the inner request its own key.',
+      );
+    }
+    return Promise.resolve().then(() => loader());
+  }
+
+  // Checked before anything else creates work: a request already open for this
+  // key is the one every later caller should be waiting on.
   const existing = inflight.get(key);
   if (existing) return existing;
 
@@ -52,7 +88,16 @@ export function cached(key, loader, { ttl = TTL_SERIES, force = false } = {}) {
   }
 
   const promise = Promise.resolve()
-    .then(() => loader())
+    .then(() => {
+      entering.add(key);
+      try {
+        return loader();
+      } finally {
+        // Cleared as soon as the loader hands back its promise, not when that
+        // promise settles — see the note above.
+        entering.delete(key);
+      }
+    })
     .then((data) => {
       store.set(key, { data, expires: Date.now() + ttl });
       return data;

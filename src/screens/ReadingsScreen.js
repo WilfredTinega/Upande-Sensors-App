@@ -15,7 +15,7 @@ import { Button, Card, ChoiceButtons, EmptyState, ErrorView } from '../component
 import { Skeleton, SkeletonList } from '../components/Skeleton';
 import { formatTick } from '../components/LineChart';
 import { TTL_SERIES, cacheKey, invalidate } from '../api/cache';
-import { getSensorReadingCount, getSensorReadings } from '../api/endpoints';
+import { getReadingsPage } from '../api/endpoints';
 import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
 import { MAX_ROWS, exportReadingsToExcel } from '../utils/exportReadings';
@@ -87,21 +87,20 @@ export function ReadingsScreen() {
     setPage(0);
   }, [site, dateFrom, dateTo]);
 
+  // The page and its total arrive together. They used to be two queries against
+  // two endpoints, so every page turn cost a second round trip to re-count a
+  // table whose size had not changed.
   const rowsKey = cacheKey('readings_page', { ...filters, start: page * PAGE_SIZE });
   const rows = useQuery(
     rowsKey,
-    () => getSensorReadings({ ...filters, start: page * PAGE_SIZE, pageLength: PAGE_SIZE }),
+    () => getReadingsPage({ ...filters, start: page * PAGE_SIZE, pageLength: PAGE_SIZE }),
     { ttl: TTL_SERIES },
   );
 
-  // Counted separately from the page, so paging doesn't re-count the table.
-  const countKey = cacheKey('readings_count', filters);
-  const count = useQuery(countKey, () => getSensorReadingCount(filters), { ttl: TTL_SERIES });
-
-  const data = Array.isArray(rows.data) ? rows.data : [];
-  // A missing count is unknown, not zero — `Number(null)` would print "0
+  const data = Array.isArray(rows.data?.rows) ? rows.data.rows : [];
+  // A missing total is unknown, not zero — `Number(null)` would print "0
   // readings" over a table that has rows in it.
-  const total = isMeasured(count.data) ? Number(count.data) : null;
+  const total = isMeasured(rows.data?.total) ? Number(rows.data.total) : null;
   const lastPage = total === null ? null : Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
 
   const from = data.length ? page * PAGE_SIZE + 1 : 0;
@@ -109,10 +108,8 @@ export function ReadingsScreen() {
 
   const refresh = useCallback(() => {
     if (rowsKey) invalidate(rowsKey);
-    if (countKey) invalidate(countKey);
-    count.refresh();
     return rows.refresh();
-  }, [rowsKey, countKey, rows, count]);
+  }, [rowsKey, rows]);
 
   const runExport = async () => {
     setExporting(true);

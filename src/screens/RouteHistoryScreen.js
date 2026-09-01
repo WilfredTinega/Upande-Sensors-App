@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -21,7 +21,6 @@ import {
   firstAssignee,
   getUserFullNames,
   getUserRoles,
-  flushDeferredInserts,
   getAuthActivity,
   getIssues,
   getRouteHistory,
@@ -46,12 +45,8 @@ function statusTone(status) {
 }
 
 const PAGE_SIZE = 50;
-/** Don't ask the server to drain its queue more than once a minute. */
 /** How often the issue list re-reads statuses while it is open. */
 const ISSUE_POLL_MS = 60000;
-
-const DRAIN_EVERY_MS = 60000;
-let lastDrainAt = 0;
 /** Matches the endpoint default; used to detect a truncated login window. */
 const LOGIN_CAP = 1000;
 
@@ -87,33 +82,21 @@ export function RouteHistoryScreen() {
   // Named apart from `people` below, which is the per-person activity rollup.
 
   const { dateFrom, dateTo } = useMemo(() => rangeToDates(rangeKey), [rangeKey]);
-  const [draining, setDraining] = useState(false);
 
   /**
-   * Pull queued visits into the doctype before reading it.
+   * Nothing to drain any more.
    *
-   * Without this the newest entries can be up to 15 minutes old — they sit in
-   * Redis until the scheduled job runs. Rate-limited to once a minute so
-   * revisiting the screen doesn't enqueue a job per visit, and it resolves
-   * quietly for accounts that may not trigger it.
+   * Visits used to reach `Route History` only through Frappe's
+   * `deferred_insert`, which parks them in Redis until a 15-minute cron
+   * runs. So this screen asked the server to run that job, slept 1.5s for
+   * the worker, then re-fetched everything it had just loaded: two extra
+   * requests, a deliberate stall, and three duplicate reads every time it
+   * opened.
+   *
+   * `upande_sensors_app.log_routes` writes the row before the request
+   * returns, so the table is already current and the queries below are all
+   * this screen needs.
    */
-  const drainThenReload = useCallback(async () => {
-    const now = Date.now();
-    if (now - lastDrainAt < DRAIN_EVERY_MS) return;
-    lastDrainAt = now;
-
-    setDraining(true);
-    const enqueued = await flushDeferredInserts();
-    // The job runs on a worker, so give it a moment before reading the table.
-    if (enqueued) await new Promise((r) => setTimeout(r, 1500));
-    setDraining(false);
-
-    invalidate('route_history');
-    invalidate('auth_activity');
-    authRef.current?.refresh();
-    countRef.current?.refresh();
-    routesRef.current?.refresh();
-  }, []);
 
   // The page number belongs to a result set; changing the window invalidates it.
   useEffect(() => {
@@ -173,24 +156,11 @@ export function RouteHistoryScreen() {
     ttl: TTL_SERIES,
   });
 
-  const authRef = useRef(auth);
-  const routesRef = useRef(routes);
-  const countRef = useRef(count);
-  authRef.current = auth;
-  routesRef.current = routes;
-  countRef.current = count;
-
-  // Drain on arrival, so the screen opens on current data rather than on
-  // whatever the last scheduled run happened to have written.
-  useEffect(() => {
-    drainThenReload();
-  }, [drainThenReload]);
-
   // A new window starts at its first page rather than wherever the last one
   // was left.
   useEffect(() => setAuthPage(0), [dateFrom, dateTo]);
 
-  const authRows = Array.isArray(auth.data) ? auth.data : [];
+  const authRows = useMemo(() => (Array.isArray(auth.data) ? auth.data : []), [auth.data]);
 
   /**
    * Paged in the client, not the server.
@@ -234,7 +204,10 @@ export function RouteHistoryScreen() {
     [loginRows],
   );
 
-  const aggregateRows = Array.isArray(aggregate.data) ? aggregate.data : [];
+  const aggregateRows = useMemo(
+    () => (Array.isArray(aggregate.data) ? aggregate.data : []),
+    [aggregate.data],
+  );
   const aggregateTruncated = aggregateRows.length >= AGG_CAP;
 
   /** One entry per person: sign-ins, total visits, and visits per screen. */
@@ -271,7 +244,7 @@ export function RouteHistoryScreen() {
   // Declared above the lookup that reads it: a `const` named in a hook's
   // dependencies is evaluated during render, so a later declaration would put
   // it in the temporal dead zone.
-  const routeRows = Array.isArray(routes.data) ? routes.data : [];
+  const routeRows = useMemo(() => (Array.isArray(routes.data) ? routes.data : []), [routes.data]);
 
   /**
    * Full names for the accounts on screen.
@@ -315,11 +288,8 @@ export function RouteHistoryScreen() {
     invalidate('route_history');
     auth.refresh();
     count.refresh();
-    const done = routes.refresh();
-    // Pull-to-refresh also asks for a drain, subject to the same rate limit.
-    drainThenReload();
-    return done;
-  }, [auth, count, routes, drainThenReload]);
+    return routes.refresh();
+  }, [auth, count, routes]);
 
   // Both doctypes grant read to System Manager only, so a refusal here is about
   // the role — not about there being no activity.
@@ -754,12 +724,6 @@ export function RouteHistoryScreen() {
         />
       ) : (
         <>
-          {draining ? (
-            <Text style={[type.caption, { color: t.textMuted, marginBottom: spacing.sm }]}>
-              Fetching the latest entries…
-            </Text>
-          ) : null}
-
           {view === 'sessions' ? (
             auth.loading || auth.refreshing ? (
               <>

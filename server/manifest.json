@@ -1,0 +1,17 @@
+{
+  "comment": "Server Script API endpoints this app depends on. `api_method` is the dotted path the client calls at /api/method/<api_method>; `file` is the script body under scripts/. Deploy with `npm run server:deploy`.",
+  "namespace": "upande_sensors_app",
+  "scripts": [
+    { "api_method": "upande_sensors_app.whoami", "file": "whoami.py", "name": "App — Whoami", "method": "GET" },
+    { "api_method": "upande_sensors_app.config", "file": "config.py", "name": "App — Dashboard Config", "method": "GET" },
+    { "api_method": "upande_sensors_app.sensor_names", "file": "sensor_names.py", "name": "App — Sensor Names", "method": "GET" },
+    { "api_method": "upande_sensors_app.live", "file": "live.py", "name": "App — Live Readings", "method": "GET" },
+    { "api_method": "upande_sensors_app.chart_series", "file": "chart_series.py", "name": "App — Chart Series", "method": "GET" },
+    { "api_method": "upande_sensors_app.readings", "file": "readings.py", "name": "App — Raw Readings", "method": "GET" },
+    { "api_method": "upande_sensors_app.activity", "file": "activity.py", "name": "App — Activity", "method": "GET" },
+    { "api_method": "upande_sensors_app.log_routes", "file": "log_routes.py", "name": "App — Log Routes", "method": "POST" },
+    { "api_method": "upande_sensors_app.reports_list", "file": "reports_list.py", "name": "App — Reports List", "method": "GET" },
+    { "api_method": "upande_sensors_app.report_submit", "file": "report_submit.py", "name": "App — Report Submit", "method": "POST" },
+    { "api_method": "upande_sensors_app.assignable_users", "file": "assignable_users.py", "name": "App — Assignable Users", "method": "GET" }
+  ]
+}

@@ -25,6 +25,25 @@ import {
 } from '../utils/timezone';
 
 const KEY_SITE = 'upande.site';
+
+/**
+ * Units the server itself asserts, used only when Sensor Settings defines none.
+ * Not guesses: `download_sensor_readings_xlsx` writes these exact headers —
+ * "Temp °C", "Soil °C", "Humidity %", "Dew Point °C" — so the backend already
+ * treats them as the units of these measures.
+ *
+ * Anything not on this list stays unlabelled rather than being assumed.
+ *
+ * At module scope because it never changes. Rebuilt inside the component it was
+ * a new object on every render, which made it a dependency `unitForType` had to
+ * declare and would have re-created that callback every time.
+ */
+const SERVER_ASSERTED_UNITS = {
+  temperature: '°C',
+  'soil temperature': '°C',
+  'dew point': '°C',
+  humidity: '%',
+};
 const KEY_TZ_MODE = 'upande.tzMode';
 const KEY_TZ_OFFSET = 'upande.tzOffset';
 
@@ -96,21 +115,6 @@ export function DashboardProvider({ children }) {
     });
     return map;
   }, [configQuery.data]);
-
-  /**
-   * Units the server itself asserts, used only when Sensor Settings defines
-   * none. Not guesses: `download_sensor_readings_xlsx` writes these exact
-   * headers — "Temp °C", "Soil °C", "Humidity %", "Dew Point °C" — so the
-   * backend already treats them as the units of these measures.
-   *
-   * Anything not on this list stays unlabelled rather than being assumed.
-   */
-  const SERVER_ASSERTED_UNITS = {
-    temperature: '°C',
-    'soil temperature': '°C',
-    'dew point': '°C',
-    humidity: '%',
-  };
 
   const unitForType = useCallback(
     (label) => {
@@ -393,6 +397,10 @@ export function DashboardProvider({ children }) {
   const refreshReference = useCallback(async () => {
     invalidate('user_sites');
     invalidate('dashboard_config');
+    // Both of the above are served from one consolidated request; without
+    // dropping it too, `refresh()` forces the outer keys and is then handed the
+    // memoised payload back, so a refresh would fetch nothing.
+    invalidate('app_config');
     await Promise.all([sitesQuery.refresh(), configQuery.refresh()]);
   }, [sitesQuery, configQuery]);
 

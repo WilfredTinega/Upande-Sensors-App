@@ -39,7 +39,7 @@ export function DashboardHeaderTitle() {
  */
 export function HeaderSiteFilter() {
   const t = useTheme();
-  const { sites, site, setSite, sitesLoading, sensorCounts, filtersLocked } = useDashboard();
+  const { sites, site, setSite, sensorCounts, filtersLocked } = useDashboard();
 
   return (
     <View

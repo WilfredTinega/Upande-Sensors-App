@@ -5,7 +5,14 @@ import { Card, EmptyState, ErrorView, StatusChip } from '../components/ui';
 import { Skeleton, SkeletonSensorCard } from '../components/Skeleton';
 import { formatTick } from '../components/LineChart';
 import { TTL_LIVE, TTL_REFERENCE, invalidate } from '../api/cache';
-import { liveKey, loadLiveValues, loadSiteSensors, sensorsKey, valuesKey } from '../api/liveSite';
+import {
+  liveKey,
+  loadLiveValues,
+  loadSiteSensors,
+  sensorsKey,
+  siteKey,
+  valuesKey,
+} from '../api/liveSite';
 import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
@@ -15,13 +22,19 @@ import { sortByMeasure } from '../utils/measures';
 /** One physical node, with every parameter it reports. */
 function SensorCard({ sensor, live, unitForType, pending }) {
   const t = useTheme();
-  const raw = live?.params?.length
-    ? live.params
-    : live
-      ? [{ type: '', value: live.value, uom: live.uom, ts: live.ts }]
-      : [];
-
-  const params = useMemo(() => sortByMeasure(raw, (p) => p.type), [raw]);
+  /**
+   * Memoised because the fallbacks are fresh array literals: a sensor reporting
+   * a single unnamed parameter, or none at all, produced a new `raw` on every
+   * render, so the sort below re-ran every time for a list that had not changed.
+   */
+  const params = useMemo(() => {
+    const raw = live?.params?.length
+      ? live.params
+      : live
+        ? [{ type: '', value: live.value, uom: live.uom, ts: live.ts }]
+        : [];
+    return sortByMeasure(raw, (p) => p.type);
+  }, [live]);
 
   const latestTs = params.reduce((newest, p) => (p.ts > (newest || '') ? p.ts : newest), null);
   const stale = isStale(latestTs);
@@ -83,7 +96,7 @@ function SensorCard({ sensor, live, unitForType, pending }) {
             const unit = param.uom || unitForType(param.type) || unitForType(sensor.sensor_type);
             return (
               <View key={`${param.type || 'value'}-${i}`} style={{ minWidth: 76 }}>
-                <Text style={[type.caption, { color: t.textSecondary }]}>
+                <Text numberOfLines={1} style={[type.caption, { color: t.textSecondary }]}>
                   {param.type || 'Reading'}
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 3 }}>
@@ -230,7 +243,10 @@ export function DashboardScreen() {
   const refresh = useCallback(() => {
     if (!site) return Promise.resolve();
     // The values are what a refresh is for; the sensor list is near-static and
-    // re-fetching it would double the cost of every pull.
+    // re-fetching it would double the cost of every pull. `siteKey` is the
+    // shared request both halves are served from — leaving it cached would hand
+    // the same payload back and the pull would fetch nothing.
+    invalidate(siteKey(site));
     invalidate(valuesKey(site));
     invalidate(liveKey(site));
     return values.refresh();

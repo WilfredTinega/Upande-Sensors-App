@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Alert, Linking, Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -9,6 +9,7 @@ import {
   SectionTitle,
   StatusChip,
 } from '../components/ui';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Skeleton } from '../components/Skeleton';
 import { PoweredBy } from '../components/PoweredBy';
 import { goToRouteHistory } from '../navigation/ref';
@@ -18,11 +19,7 @@ import { getServerVersions, getUserRoles } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
 import { useQuery } from '../hooks/useQuery';
 import { UPDATE_ERRORS, formatBytes } from '../api/updates';
-import {
-  INSTALL_ERRORS,
-  downloadAndInstallApk,
-  openUnknownAppSourcesSettings,
-} from '../utils/installApk';
+import { INSTALL_ERRORS, openUnknownAppSourcesSettings } from '../utils/installApk';
 import { APP_VERSION, useUpdate } from '../context/UpdateContext';
 import { RELEASES_URL } from '../config';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
@@ -71,14 +68,13 @@ function Row({ label, value, muted }) {
 
 export function SettingsScreen() {
   const t = useTheme();
-  const { user, baseUrl, changeServer, biometrics, setBiometricEnabled } = useAuth();
+  const { user, baseUrl, changeServer, biometrics, setBiometricEnabled, signOut } = useAuth();
 
   const [draftUrl, setDraftUrl] = useState(baseUrl);
+  const [signOutOpen, setSignOutOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [togglingBio, setTogglingBio] = useState(false);
   const [editingServer, setEditingServer] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const [progress, setProgress] = useState(null); // 0..1, or null when unknown
   // Shared with the tab badge — the launch check has usually already run by the
   // time this screen opens, so the card renders populated rather than empty.
   const {
@@ -86,6 +82,12 @@ export function SettingsScreen() {
     checking: checkingUpdate,
     error: updateError,
     check: onCheckUpdate,
+    // The download and the install belong to the provider, so they carry on
+    // while this screen is closed and both paths report one state.
+    downloading,
+    progress,
+    installError,
+    install,
   } = useUpdate();
 
   const roles = useQuery(
@@ -157,33 +159,76 @@ export function SettingsScreen() {
    * download can fail for reasons the user can work around in a browser (a
    * captive portal, a URL guessed from the atom feed that does not exist).
    */
-  const installUpdate = async () => {
+  /**
+   * Retry, essentially.
+   *
+   * The provider downloads and installs on its own as soon as it finds a
+   * release, so by the time anyone reaches this button the attempt has usually
+   * already been made. Pressing it repeats that attempt — for a first one that
+   * was blocked by "Install unknown apps", or an installer the user dismissed.
+   *
+   * Only this path is allowed to raise an alert. A background attempt that
+   * fails reports itself inline below instead, because interrupting someone with
+   * a dialog about something they never asked for is worse than staying quiet.
+   */
+  const installUpdate = useCallback(async () => {
     if (!update?.downloadUrl) {
       await openInBrowser(update?.pageUrl);
       return;
     }
-    setDownloading(true);
-    setProgress(null);
-    try {
-      await downloadAndInstallApk(update.downloadUrl, {
-        fileName: update.assetName,
-        onProgress: setProgress,
-      });
-    } catch (err) {
-      // A blocked install is one toggle away from working, so send them there
-      // rather than to a browser that would hit the same wall.
-      const blocked = err?.kind === INSTALL_ERRORS.BLOCKED;
-      Alert.alert('Update failed', err?.message ?? 'The update could not be installed.', [
+    const reached = await install(update, { auto: false });
+    if (reached) return;
+
+    // A blocked install is one toggle away from working, so send them there
+    // rather than to a browser that would hit the same wall.
+    const blocked = installError?.kind === INSTALL_ERRORS.BLOCKED;
+    Alert.alert(
+      'Update failed',
+      installError?.message ?? 'The update could not be installed.',
+      [
         { text: 'Cancel', style: 'cancel' },
         blocked
           ? { text: 'Open settings', onPress: () => openUnknownAppSourcesSettings().catch(() => {}) }
           : { text: 'Open in browser', onPress: () => openInBrowser(update?.pageUrl) },
-      ]);
-    } finally {
-      setDownloading(false);
-      setProgress(null);
+      ],
+    );
+  }, [update, install, installError]);
+
+  /**
+   * The update button's whole story, in one string.
+   *
+   * Percentage and byte count both, because they answer different questions: a
+   * percentage says how far along, the megabytes say whether it is moving at
+   * all. Without a Content-Length there is no percentage to give, so the bytes
+   * carry it alone rather than a bar sitting at zero.
+   */
+  const updateLabel = useMemo(() => {
+    if (downloading) {
+      const written = formatBytes(progress?.written) ?? '0.0 MB';
+      const total = progress?.total ? formatBytes(progress.total) : null;
+      if (progress?.fraction == null) {
+        return total ? `Updating… ${written} of ${total}` : `Updating… ${written}`;
+      }
+      return `Updating ${Math.round(progress.fraction * 100)}% · ${written} of ${total}`;
     }
-  };
+    if (checkingUpdate) return 'Checking…';
+    if (update?.available) return `Update to ${update.version}`;
+    return 'Check for updates';
+  }, [downloading, progress, checkingUpdate, update?.available, update?.version]);
+
+  /**
+   * One button, three jobs, in the order they happen: check, then update, then
+   * report progress.
+   *
+   * Two buttons meant the screen showed "Check for updates" next to "Update to
+   * 1.0.5" — an invitation to look for something that had already been found.
+   * With one, the control is only ever the next thing to do.
+   */
+  const onUpdatePress = useCallback(() => {
+    if (downloading) return;
+    if (update?.available) return installUpdate();
+    return onCheckUpdate();
+  }, [downloading, update?.available, installUpdate, onCheckUpdate]);
 
   const appVersions = useMemo(() => {
     const data = versions.data;
@@ -418,66 +463,43 @@ export function SettingsScreen() {
           </Text>
         ) : null}
 
+        {/* A background attempt reports itself here rather than in an alert.
+            Left visible after a manual retry too — the alert is dismissed, and
+            without this the screen would go back to looking as if all was
+            well. */}
+        {installError ? (
+          <Text
+            style={[
+              type.caption,
+              { color: t.status.critical, marginTop: spacing.xs, lineHeight: 17 },
+            ]}
+          >
+            {installError.message}
+          </Text>
+        ) : null}
+
+        {/*
+            One control, carrying everything.
+
+            It reads "Update" throughout — never "Install" or "Download", which
+            describe the mechanism rather than what the user is doing — and the
+            progress is on the button itself. The separate bar and byte line
+            underneath are gone: three things reporting one download is two more
+            than the screen needs, and the count belongs where the eye already
+            is.
+         */}
         <Button
-          label={checkingUpdate ? 'Checking…' : 'Check for updates'}
-          tone="ghost"
+          label={updateLabel}
+          tone={update?.available || downloading ? 'accent' : 'ghost'}
           style={{ marginTop: spacing.md }}
-          onPress={onCheckUpdate}
-          loading={checkingUpdate}
+          onPress={onUpdatePress}
+          // The fill is the progress indicator. A spinner still covers the case
+          // where the server sent no Content-Length and there is no fraction to
+          // draw — "working, length unknown" is all that can honestly be said.
+          progress={downloading ? progress?.fraction ?? null : null}
+          loading={checkingUpdate || (downloading && progress?.fraction == null)}
           disabled={downloading}
         />
-
-        {update?.available ? (
-          <>
-            <Button
-              label={
-                downloading
-                  ? progress?.fraction == null
-                    ? 'Downloading…'
-                    : `Downloading ${Math.round(progress.fraction * 100)}%`
-                  : `Update to ${update.version}`
-              }
-              style={{ marginTop: spacing.sm }}
-              onPress={installUpdate}
-              loading={downloading}
-            />
-
-            {/* A determinate bar only once the server has told us the size;
-                before then the button's spinner is the only honest signal. */}
-            {downloading && progress?.fraction != null ? (
-              <View
-                style={{
-                  height: 4,
-                  borderRadius: 2,
-                  backgroundColor: t.surfaceSunken,
-                  marginTop: spacing.sm,
-                  overflow: 'hidden',
-                }}
-              >
-                <View
-                  style={{
-                    width: `${Math.round(progress.fraction * 100)}%`,
-                    height: '100%',
-                    backgroundColor: t.accent,
-                  }}
-                />
-              </View>
-            ) : null}
-
-            {downloading && progress ? (
-              <Text
-                style={[
-                  type.caption,
-                  { color: t.textMuted, marginTop: spacing.xs, textAlign: 'right' },
-                ]}
-              >
-                {formatBytes(progress.written) ?? '0.0 MB'}
-                {progress.total ? ` of ${formatBytes(progress.total)}` : ''}
-              </Text>
-            ) : null}
-
-          </>
-        ) : null}
 
         {updateError ? (
           <Button
@@ -489,8 +511,30 @@ export function SettingsScreen() {
         ) : null}
       </Card>
 
+      {/* Last on the screen, and the only destructive action on it.
+          Ending the session belongs beside the account it belongs to, rather
+          than in the tab bar where it used to sit one mis-tap away from the
+          screens people use all day. */}
+      <Card style={{ marginTop: spacing.xl }}>
+        <Button label="Log out" tone="danger" onPress={() => setSignOutOpen(true)} />
+      </Card>
+
       <PoweredBy style={{ marginTop: spacing.xl }} />
 
+      {/* Confirmed, not immediate: a tap here ends the session, and the reverse
+          costs a password. */}
+      <ConfirmDialog
+        visible={signOutOpen}
+        title="Are you sure you want to log out?"
+        confirmLabel="Yes"
+        cancelLabel="No"
+        destructive
+        onCancel={() => setSignOutOpen(false)}
+        onConfirm={() => {
+          setSignOutOpen(false);
+          signOut();
+        }}
+      />
     </ScrollView>
   );
 }

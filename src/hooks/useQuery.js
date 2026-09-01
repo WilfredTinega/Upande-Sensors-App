@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
 import { TTL_SERIES, cached, peek } from '../api/cache';
+import { subscribeToNetwork } from '../api/network';
 
 /**
  * Cache-aware data hook.
@@ -27,6 +28,9 @@ export function useQuery(key, loader, { ttl = TTL_SERIES, enabled = true, pollMs
 
   const loaderRef = useRef(loader);
   loaderRef.current = loader;
+
+  /** Set when a load was abandoned for want of a connection. */
+  const offlineRef = useRef(false);
   // Guards against a slow response for an old key overwriting a newer one.
   const keyRef = useRef(key);
   keyRef.current = key;
@@ -57,10 +61,27 @@ export function useQuery(key, loader, { ttl = TTL_SERIES, enabled = true, pollMs
         setData(result);
       } catch (err) {
         if (keyRef.current !== runKey || err?.name === 'AbortError') return;
+        /**
+         * Being offline is not an answer, so it is not reported as one.
+         *
+         * `ErrorView` says "this could not be loaded", which is a claim about
+         * the data. With no connection the truthful state is "not yet": the
+         * screen keeps its skeleton, the offline notice explains why, and the
+         * effect below re-runs the moment a request gets through again. Saying
+         * "check the site URL" over a working server, as this used to, sent
+         * people to re-type an address that was never wrong.
+         */
+        if (err?.isOffline) {
+          setError(null);
+          offlineRef.current = true;
+          return;
+        }
         setError(err);
       } finally {
         if (keyRef.current === runKey) {
-          setLoading(false);
+          // Left loading while offline: the skeleton is the honest state, and a
+          // retry is already queued.
+          if (!offlineRef.current) setLoading(false);
           setRefreshing(false);
         }
       }
@@ -90,6 +111,20 @@ export function useQuery(key, loader, { ttl = TTL_SERIES, enabled = true, pollMs
     }, pollMs);
     return () => clearInterval(id);
   }, [active, pollMs, run]);
+
+  /**
+   * Retry as soon as anything gets through again.
+   *
+   * Only for a load this hook actually abandoned — subscribing every query to
+   * every reconnection would refetch screens nobody is looking at.
+   */
+  useEffect(() => {
+    return subscribeToNetwork((offline) => {
+      if (offline || !offlineRef.current) return;
+      offlineRef.current = false;
+      run('load');
+    });
+  }, [run]);
 
   const refresh = useCallback(() => run('refresh'), [run]);
 

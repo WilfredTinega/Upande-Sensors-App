@@ -50,7 +50,6 @@ function panelWidthFor(labels, screenWidth) {
  * drawer is conventionally opened from.
  */
 export function SidebarToggle() {
-  const t = useTheme();
   const { openSidebar, activeTab } = useDashboard();
 
   return (

@@ -4,7 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 import { client, normaliseBaseUrl, NO_BASE_URL, FrappeError } from '../api/client';
 import { invalidate } from '../api/cache';
 import { getBiometricCapability, promptBiometric } from '../utils/biometrics';
-import { getUserProfile } from '../api/endpoints';
+import { getSession, getUserProfile } from '../api/endpoints';
 import { flushRouteHistory } from '../utils/routeHistory';
 
 const KEY_SID = 'upande.sid';
@@ -69,7 +69,12 @@ export function AuthProvider({ children }) {
    */
   const resolveUserName = useCallback(async (typed) => {
     try {
-      const resolved = await client.whoAmI();
+      // Read from the session endpoint the app loads anyway, rather than
+      // `frappe.auth.get_logged_user`. That was its own round trip on every
+      // sign-in — measured at 229ms on a device — for a name `whoami` already
+      // carries, and this joins the cached call instead of adding a request.
+      const info = await getSession();
+      const resolved = info?.user;
       return resolved && resolved !== 'Guest' ? resolved : typed;
     } catch {
       return typed;
@@ -258,6 +263,15 @@ export function AuthProvider({ children }) {
 
       try {
         const session = await client.login(username.trim(), password);
+        /**
+         * A new session must not be able to read the previous one's cache.
+         *
+         * `signOut` clears it, but signing in is reachable without one — a
+         * failed restore, or a different account typed straight over the login
+         * form — and the identity now comes from the cached session endpoint. A
+         * stale entry there would name the wrong account.
+         */
+        invalidate();
         await Promise.all([
           SecureStore.setItemAsync(KEY_BASE_URL, url),
           SecureStore.setItemAsync(KEY_SID, session.sid),
@@ -329,7 +343,9 @@ export function AuthProvider({ children }) {
       );
       return false;
     }
-  }, [capability]);
+    // `resolveUserName` is a `useCallback(…, [])`, so listing it costs nothing
+    // and stops the identity being silently captured from a stale render.
+  }, [capability, resolveUserName]);
 
   /**
    * Turn biometric unlock on or off.

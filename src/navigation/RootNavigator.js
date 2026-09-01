@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -10,8 +10,8 @@ import { LoginScreen } from '../screens/LoginScreen';
 import { ReadingsScreen } from '../screens/ReadingsScreen';
 import { RouteHistoryScreen } from '../screens/RouteHistoryScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
+import { OfflineToast } from '../components/OfflineToast';
 import { FloatingSidebar, SidebarToggle } from '../components/FloatingSidebar';
-import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ReportButton } from '../components/ReportButton';
 import { UserAvatar } from '../components/UserAvatar';
 import {
@@ -34,19 +34,16 @@ const ICONS = {
   Readings: ['list', 'list-outline'],
   Dashboard: ['analytics', 'analytics-outline'],
   Account: ['person-circle', 'person-circle-outline'],
-  SignOut: ['log-out', 'log-out-outline'],
 };
 
 /**
- * Placeholder for the sign-out tab.
+ * Logging out lives on the Account screen, not in the tab bar.
  *
- * The tab is an action, not a destination — its `tabPress` listener cancels
- * navigation, so this never renders. It exists only because a bottom tab must
- * be backed by a screen.
+ * It was a tab that cancelled its own navigation and opened a confirmation
+ * instead — an action dressed as a destination, sitting one mis-tap away from
+ * the screens people use all day. The tab bar is now four destinations that all
+ * behave the same way, and the confirmation lives next to the account it ends.
  */
-function NeverRendered() {
-  return null;
-}
 
 /** Screens the dashboard-tab sidebar applies to. */
 const SIDEBAR_ROUTES = new Set(['Live', 'Readings', 'Dashboard']);
@@ -56,10 +53,8 @@ const SITE_FILTER_ROUTES = new Set(['Live', 'Readings', 'Dashboard']);
 
 function SignedInApp() {
   const t = useTheme();
-  const { signOut, user } = useAuth();
+  const { user } = useAuth();
   const { available: updateAvailable } = useUpdate();
-
-  const [signOutOpen, setSignOutOpen] = useState(false);
 
   /**
    * Enabled during render, not in an effect.
@@ -214,20 +209,6 @@ function SignedInApp() {
               component={SettingsScreen}
               options={{ headerTitle: 'Account', tabBarLabel: 'Account' }}
             />
-            {/* An action dressed as a tab: the listener cancels the navigation
-                and opens the confirmation instead, so a stray tap can never
-                sign anyone out on its own. */}
-            <Tab.Screen
-              name="SignOut"
-              component={NeverRendered}
-              options={{ tabBarLabel: 'Log out' }}
-              listeners={{
-                tabPress: (e) => {
-                  e.preventDefault();
-                  setSignOutOpen(true);
-                },
-              }}
-            />
           </Tab.Navigator>
         </NavigationContainer>
 
@@ -237,18 +218,9 @@ function SignedInApp() {
             screenshot it captures is of the screen rather than of itself. */}
         <ReportButton />
 
-        <ConfirmDialog
-          visible={signOutOpen}
-          title="Are you sure you want to log out?"
-          confirmLabel="Yes"
-          cancelLabel="No"
-          destructive
-          onCancel={() => setSignOutOpen(false)}
-          onConfirm={() => {
-            setSignOutOpen(false);
-            signOut();
-          }}
-        />
+        {/* Outside the navigator too: connectivity is the app's state, not one
+            screen's, and the screens themselves stay on their skeletons. */}
+        <OfflineToast />
       </View>
     </DashboardProvider>
   );
