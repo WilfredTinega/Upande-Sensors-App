@@ -87,6 +87,57 @@ function findApkAsset(release) {
   return assets.find((a) => typeof a?.name === 'string' && a.name.toLowerCase().endsWith('.apk')) ?? null;
 }
 
+/**
+ * How an update can be delivered — and it is the version number that decides.
+ *
+ * `major.minor` is the compatibility boundary, because that is exactly what the
+ * odometer in `scripts/version.mjs` already means: a normal merge bumps the
+ * patch, and `--bump minor` is the deliberate signal that something native
+ * changed. So:
+ *
+ *   1.0.5 -> 1.0.6   same runtime. Only JavaScript can have changed, so the
+ *                    update is a bundle of a few hundred KB.
+ *   1.0.9 -> 1.1.0   the runtime moved. New native code, a new permission, an
+ *                    SDK bump — none of which a JS bundle can carry — so it is
+ *                    the full ~74MB APK or nothing.
+ *
+ * This is not a convention the app has to police: it is the same string
+ * `expo-updates` uses as its own `runtimeVersion` gate, so a bundle published
+ * for runtime "1.0" is *refused* by a 1.1 build rather than half-applied. The
+ * rule and its enforcement are the same fact.
+ */
+export const UPDATE_KINDS = {
+  /** Deliverable as a JS bundle — fast, small, no reinstall. */
+  JS: 'js',
+  /** Needs a new APK: the native side changed. */
+  NATIVE: 'native',
+};
+
+/** The `runtimeVersion` a given app version belongs to, e.g. "1.0" for 1.0.6. */
+export function runtimeVersionOf(version) {
+  const parts = String(version || '').trim().split('.');
+  if (parts.length < 2) return null;
+  const major = Number.parseInt(parts[0], 10);
+  const minor = Number.parseInt(parts[1], 10);
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) return null;
+  return `${major}.${minor}`;
+}
+
+/**
+ * Which delivery an upgrade needs. Null when there is nothing to compare.
+ *
+ * Deliberately does NOT check which is newer — `compareVersions` already owns
+ * that, and answering "is this an upgrade" here as well would give two places
+ * the chance to disagree. This answers only "if we were to move between these
+ * two, what would it take".
+ */
+export function updateKind(installed, latest) {
+  const from = runtimeVersionOf(installed);
+  const to = runtimeVersionOf(latest);
+  if (!from || !to) return null;
+  return from === to ? UPDATE_KINDS.JS : UPDATE_KINDS.NATIVE;
+}
+
 /** Byte count as MB, or null when the size is unknown. Exported for the
  *  download progress line, which learns the real size from Content-Length. */
 export function formatBytes(bytes) {
@@ -252,6 +303,12 @@ export async function checkForUpdate(currentVersion) {
     ...release,
     current: currentVersion ?? null,
     available: compareVersions(release.version, currentVersion) > 0,
+    // What this upgrade would take: a JS bundle within the same runtime, or a
+    // full APK across runtimes. Carried on the release so every consumer reads
+    // one verdict rather than re-deriving it.
+    kind: updateKind(currentVersion, release.version),
+    runtime: runtimeVersionOf(currentVersion),
+    releaseRuntime: runtimeVersionOf(release.version),
   };
 
   await SecureStore.setItemAsync(
