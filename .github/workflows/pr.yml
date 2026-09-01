@@ -18,6 +18,7 @@ jobs:
   validate:
     name: Lint & dependency check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +43,7 @@ jobs:
   version:
     name: Version preview
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # The version script walks history back to the last v* tag, so a shallow
       # clone would make it read the wrong starting point.
@@ -76,6 +78,8 @@ jobs:
   build:
     name: Debug APK
     runs-on: ubuntu-latest
+    # Same reasoning as the release job: a Gradle hang should fail, not linger.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

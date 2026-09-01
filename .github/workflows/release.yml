@@ -30,6 +30,20 @@ jobs:
   release:
     name: Build & publish APK
     runs-on: ubuntu-latest
+    # A hung Gradle build must not hold the queue.
+    #
+    # `concurrency.cancel-in-progress` is deliberately false above — cancelling a
+    # half-published release is worse than waiting for it — but that means one
+    # stuck run blocks every release behind it, and with no timeout GitHub waits
+    # six hours before giving up. That happened: a build that had run out of JVM
+    # Metaspace sat on `Assemble release APK` for 40 minutes while the next
+    # merge's release run stayed `pending`, so main advanced twice and the
+    # version never moved, because the tag step never ran.
+    #
+    # A normal run is about 14 minutes, and less now that the build carries two
+    # architectures instead of four. 45 leaves generous headroom and still fails
+    # the same day.
+    timeout-minutes: 45
     # The version bump commit is pushed back to this same branch; without this
     # guard it would trigger an endless release loop.
     if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
