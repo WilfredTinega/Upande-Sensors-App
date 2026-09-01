@@ -45,6 +45,7 @@
     },
     "plugins": [
       "./plugins/withReleaseSigning",
+      "./plugins/withBuildTuning",
       "expo-secure-store",
       "expo-font",
       [

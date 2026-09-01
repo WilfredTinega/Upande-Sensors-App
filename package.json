@@ -44,7 +44,8 @@
     "test:cache": "node tests/cache.test.js",
     "test": "node tests/routeHistory.test.js && node tests/cache.test.js && node tests/updateKind.test.js",
     "test:update-kind": "node tests/updateKind.test.js",
-    "ota:build": "node scripts/publish-ota.mjs"
+    "ota:build": "node scripts/publish-ota.mjs",
+    "android:emulator": "expo run:android -- -PreactNativeArchitectures=x86_64"
   },
   "devDependencies": {
     "eslint": "^9.39.5",
