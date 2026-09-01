@@ -133,19 +133,33 @@ export function UpdateProvider({ children }) {
    * 74MB APK, and there is no installer and no reinstall. `reloadAsync` restarts
    * into it.
    *
-   * Returns false rather than throwing when this route is unavailable: in Expo
-   * Go and in development `Updates.isEnabled` is false, and a runtime with
-   * nothing published yet simply has no update. Both are ordinary, and the
-   * caller falls back to the APK.
+   * Returns false rather than throwing when this route is unavailable, and that
+   * has to hold for *every* way it can be unavailable, not just the tidy ones.
+   * In Expo Go and in development `Updates.isEnabled` is false; a runtime with
+   * nothing published yet simply has no update; and — the case that actually
+   * bit — an update server that answers with anything other than a manifest
+   * makes `checkForUpdateAsync` **reject**, not resolve to `isAvailable: false`.
+   * A 404 from the static host is enough to do it.
+   *
+   * Unguarded, that rejection propagated out of here into `install`, whose catch
+   * turned the whole attempt into an install error and skipped the APK below.
+   * So a dead OTA host did not merely disable the fast path, it disabled
+   * updating altogether — the opposite of the fallback this function exists to
+   * make safe. Every failure is therefore a decline: the APK is the answer, and
+   * choosing to try the fast path first can never cost the user the update.
    */
   const applyJsUpdate = useCallback(async () => {
     if (!Updates.isEnabled) return false;
-    const found = await Updates.checkForUpdateAsync();
-    if (!found?.isAvailable) return false;
-    await Updates.fetchUpdateAsync();
-    // Everything after this is on the other side of a restart.
-    await Updates.reloadAsync();
-    return true;
+    try {
+      const found = await Updates.checkForUpdateAsync();
+      if (!found?.isAvailable) return false;
+      await Updates.fetchUpdateAsync();
+      // Everything after this is on the other side of a restart.
+      await Updates.reloadAsync();
+      return true;
+    } catch {
+      return false;
+    }
   }, []);
 
   const install = useCallback(
