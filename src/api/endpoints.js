@@ -314,9 +314,10 @@ export function getChartSeries(
   signal,
 ) {
   const types = Array.isArray(sensorTypes) ? sensorTypes : [sensorTypes].filter(Boolean);
-  if (!types.length) {
-    return Promise.resolve({ interval, bucket_mins: bucketMins || 0, series: [] });
-  }
+  // An empty list is NOT short-circuited: it means "chart whatever this window
+  // contains", which only the server can work out. Returning early here made
+  // the single-day view — the one path that relies on that discovery — come back
+  // empty every time without ever issuing a request.
   return client.call(
     M.chartSeries,
     {
@@ -576,40 +577,6 @@ export async function getAuthActivity({ dateFrom, dateTo, pageLength = 1000 } = 
     signal,
   );
   return res?.auth || [];
-}
-
-/**
- * Force Frappe to drain its deferred-insert queue now.
- *
- * Vestigial since visits became direct inserts, but kept: it still flushes
- * anything an older build of the app left sitting in Redis. Restricted to
- * System Manager on the server, and simply fails for everyone else.
- */
-export async function flushDeferredInserts(signal) {
-  try {
-    const name = await client.call(
-      'frappe.client.get_value',
-      {
-        doctype: 'Scheduled Job Type',
-        filters: { method: 'frappe.deferred_insert.save_to_db' },
-        fieldname: 'name',
-      },
-      { signal },
-    );
-    const jobName = name?.name;
-    if (!jobName) return false;
-
-    await client.call(
-      'frappe.core.doctype.scheduled_job_type.scheduled_job_type.execute_event',
-      { doc: JSON.stringify({ name: jobName }) },
-      { write: true, signal },
-    );
-    return true;
-  } catch {
-    // Not permitted, or the job row is absent on this site. Either way the
-    // scheduled run still covers it — this is an accelerator, not the mechanism.
-    return false;
-  }
 }
 
 /* ── Route history (writing) ─────────────────────────────────────────────── */

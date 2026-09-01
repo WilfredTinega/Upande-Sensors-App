@@ -129,6 +129,11 @@ Python. What actually bites:
   `activity.py` does.
 - **A write over GET is rolled back**, reporting success while changing
   nothing. The two POST scripts refuse a GET outright rather than lie about it.
+- **Tuple unpacking on assignment does not work.** RestrictedPython supplies
+  `_iter_unpack_sequence_` for `for` loops but no `_unpack_sequence_`, so
+  `rows, since = my_helper()` raises `NameError: _unpack_sequence_` at *run*
+  time — `_compile_code` passes it. Return a dict, as `latest_in_window` in
+  `live.py` does.
 - **A literal `%` in SQL collides with the driver's `%(name)s` placeholders**
   and the query dies before it runs. Bind LIKE patterns as parameters.
 
@@ -160,6 +165,55 @@ frappe.db.rollback()                          # for the POST scripts
 Worth covering: an Administrator, an account scoped to one Sensor Site by User
 Permission, and an account with none at all — the last sees *every* site, which
 is the app's rule and not an oversight.
+
+## Performance
+
+`tabSensor Reading` (~301k rows) is indexed on `timestamp`, `site_name`,
+`(sensor_type, timestamp)` and `(site_name, sensor_type, sensor_name)`. There is
+**no index leading with `sensor_name`, and none on `(site_name, timestamp)`**, so
+a site-scoped query's cost is decided by how many rows its time window lets
+through: narrow windows are served from the `timestamp` index, wide ones degrade
+into a ~216k-row scan of one site.
+
+That is why `live` defaults to a 3-day window rather than 180 days, and why
+`chart_series` costs what it costs. Measured against sensor.upande.com,
+Red Lands Roses, with a 0.50s bare `/api/method/ping` round trip as the floor:
+
+| | wall | server work |
+| --- | --- | --- |
+| `reports_list` | 0.51s | 0.01s |
+| `config`, `whoami` | 0.55s | 0.05s |
+| `chart_series` 1 day, 30-min buckets | 0.56s | 0.06s |
+| `chart_series` 7 days | 0.60s | 0.10s |
+| `readings` page of 50 + total | 0.66s | 0.16s |
+| `live` | 0.68s | 0.18s |
+| `sensor_names` | 0.76s | 0.26s |
+| `activity` (50 routes, 200 auth) | 0.89s | 0.39s |
+| `chart_series` 60 days | 1.12s | 0.62s |
+
+`chart_series` also returns `sensor_names` for the window, so the caller's sensor
+picker costs no extra request. It had to be a *sequential* one — the picker is
+scoped to what is on the chart, so it could not be issued until the chart had
+arrived.
+
+Numbers above are `curl`, which pays a fresh TLS handshake per call. The app
+reuses its connection, and a device log against the same site measured `live` at
+350ms and `log_routes` at ~400ms — so **request count, not latency, is what the
+app feels.** `src/api/client.js` prints one `[api N] 350ms 8KB 200 <method>` line
+per request under `__DEV__`; read that off the Metro console before optimising
+anything.
+
+For comparison, the calls these replaced, same site: `get_site_sensors` +
+`get_live_readings` = **26.7s** sequential, and the desk's own `sensorDashboard`
+script is 1.6s for a day and 3.9s for a month.
+
+**If more speed is needed**, the structural fix is an index, not a script
+change: add `("sensor_name_type_timestamp_idx", ["sensor_name", "sensor_type",
+"timestamp"])` to `COMPOSITE_INDEXES` in `upande_sensors/install.py` — that file
+already applies its indexes idempotently on every migrate — and the 60-day
+`chart_series` and any per-sensor lookup become index seeks. It is an
+`ALTER TABLE` on a 301k-row production table, so it wants a maintenance window
+and a deliberate decision.
 
 ## Client side
 

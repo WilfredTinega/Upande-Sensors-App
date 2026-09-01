@@ -239,8 +239,20 @@ async function flush() {
     scheduleRetry();
   } finally {
     inFlight = false;
-    // Anything recorded while that request was open goes out now.
-    if (pending.length && !attempt) flush();
+    /**
+     * Only a real backlog is drained immediately.
+     *
+     * This used to re-flush whenever *anything* had arrived during the request,
+     * which defeated the batching it sits inside: moving through screens while a
+     * send was open produced a request per screen, each carrying one row. A
+     * device log showed three consecutive 400ms sends of a single visit each,
+     * competing with the data the user was actually waiting for.
+     *
+     * A partial batch now waits for the next tick instead. A queue at or over
+     * `BATCH` still drains at once, because that is a backlog rather than a
+     * burst.
+     */
+    if (pending.length >= BATCH && !attempt) flush();
   }
 }
 

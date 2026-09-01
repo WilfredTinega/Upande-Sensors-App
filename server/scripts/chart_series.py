@@ -153,13 +153,18 @@ if site:
 elif allowed is not None:
 	where.append(in_clause("site_name", allowed, params, "site"))
 
-if sensor_name:
-	params["sensor_name"] = sensor_name
-	where.append("sensor_name = %(sensor_name)s")
-
 gated = tab_sensor_names(tab_tag)
 if gated:
 	where.append(in_clause("sensor_name", gated, params, "tag"))
+
+# Everything above scopes the *window*; the sensor filter is kept apart because
+# the name list below must not be narrowed by it. Scoping the picker to the
+# sensor already picked would leave no way to switch off it.
+scope_where = [] + where
+
+if sensor_name:
+	params["sensor_name"] = sensor_name
+	where.append("sensor_name = %(sensor_name)s")
 
 # A gated tab with nothing tagged charts nothing — as distinct from an ungated
 # tab, which charts everything.
@@ -279,10 +284,25 @@ else:
 			}
 		)
 
+	# The sensors that reported any of these measures in this window.
+	#
+	# Returned with the series so the caller's sensor picker costs nothing. It
+	# could only be populated once the chart had loaded (the picker is scoped to
+	# what is on the chart), which made it a second, *sequential* request — and a
+	# round trip from a phone on mobile data costs far more than this GROUP BY.
+	name_rows = frappe.db.sql(
+		"SELECT sensor_name FROM `tabSensor Reading` WHERE "
+		+ " AND ".join(scope_where + ["sensor_name IS NOT NULL", "sensor_name <> ''"])
+		+ " GROUP BY sensor_name ORDER BY sensor_name",
+		params,
+		as_dict=True,
+	)
+
 	frappe.response["message"] = {
 		"interval": interval,
 		"bucket_mins": bucket_mins,
 		"date_from": date_from,
 		"date_to": date_to,
 		"series": series,
+		"sensor_names": [r.get("sensor_name") for r in name_rows if r.get("sensor_name")],
 	}

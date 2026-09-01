@@ -18,6 +18,7 @@ import {
   isMeasured,
   measuredValues,
   measuresFromLive,
+  shortMeasureLabel,
   sortByMeasure,
   withDerivedMeasures,
 } from '../utils/measures';
@@ -162,15 +163,32 @@ export function ChartsScreen() {
    * if the list says it doesn't belong here.
    */
   const firstMeasure = merged.series[0]?.label;
+
+  /**
+   * The names come back with the chart itself.
+   *
+   * This used to be its own request, and a *sequential* one: the picker is
+   * scoped to what is on the chart, so it could not even be issued until the
+   * trend had arrived. Two round trips is the one thing this screen could not
+   * afford, because a phone on mobile data pays far more per round trip than the
+   * query costs to run.
+   *
+   * The separate call is kept for the legacy fallback path, which has no names
+   * to give — hence the null key, which stops `useQuery` issuing anything.
+   */
+  const servedNames = Array.isArray(trend.data?.sensorNames) ? trend.data.sensorNames : null;
   const names = useQuery(
-    site && firstMeasure
+    !servedNames && site && firstMeasure
       ? cacheKey('chart_sensor_names', { site, type: firstMeasure, tabTag })
       : null,
     () => getChartSensorNames({ site, sensorType: firstMeasure, tabTag }),
     { ttl: TTL_REFERENCE },
   );
 
-  const availableNames = useMemo(() => (Array.isArray(names.data) ? names.data : []), [names.data]);
+  const availableNames = useMemo(
+    () => servedNames || (Array.isArray(names.data) ? names.data : []),
+    [servedNames, names.data],
+  );
 
   // A sensor picked for one site or measure usually doesn't exist under the
   // next; clear it once the real list arrives rather than querying for a sensor
@@ -334,7 +352,9 @@ export function ChartsScreen() {
               <View
                 style={{
                   flexDirection: 'row',
-                  flexWrap: 'wrap',
+                  // One line, always. The tiles are a comparable set; a stray
+                  // fourth on its own row reads as a different kind of thing.
+                  flexWrap: 'nowrap',
                   gap: spacing.sm,
                   padding: spacing.lg,
                   paddingBottom: 0,
@@ -373,6 +393,8 @@ export function ChartsScreen() {
                       key={s.label}
                       accessibilityRole="button"
                       accessibilityState={{ selected: focused.includes(s.label) }}
+                      // The full name here: a screen reader has no width limit,
+                      // and "Soil Temp" is a worse thing to hear than to read.
                       accessibilityLabel={`${s.label}. ${
                         focused.includes(s.label) ? 'Selected. Tap to remove' : 'Tap to compare'
                       }`}
@@ -384,10 +406,14 @@ export function ChartsScreen() {
                       // grow/basis rather than `flex: 1`: in a wrapping row a
                       // flexed child leaves the row's height uncomputed, and the
                       // tiles then bleed over the chart below them.
-                      style={{ flexGrow: 1, flexBasis: 92, minWidth: 92 }}
+                      // `flex: 1` with `minWidth: 0` now that the row never
+                      // wraps: the earlier flexGrow/flexBasis pair existed to
+                      // keep a wrapping row's height computable, and with
+                      // `nowrap` it would instead push the tiles past the edge.
+                      style={{ flex: 1, minWidth: 0 }}
                     >
                       <StatTile
-                        label={s.label}
+                        label={shortMeasureLabel(s.label)}
                         value={s.latest === null ? null : formatTick(s.latest)}
                         unit={s.unit}
                         accent={s.color}

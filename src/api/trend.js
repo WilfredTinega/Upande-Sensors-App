@@ -92,9 +92,13 @@ function empty() {
  * empty line in the legend with an empty tile above it says nothing.
  */
 function toLabelledSeries(payload, { dateFrom, dateTo } = {}) {
+  // Carried through even when there is no data to draw: the sensor picker is
+  // populated from it, and a window with no readings still has sensors to
+  // choose between.
+  const sensorNames = Array.isArray(payload?.sensor_names) ? payload.sensor_names : null;
   const rows = Array.isArray(payload?.series) ? payload.series : [];
   const usable = rows.filter((s) => s?.points?.length && isPlottable(s.type));
-  if (!usable.length) return empty();
+  if (!usable.length) return { ...empty(), sensorNames };
 
   // A dense grid where the interval defines one, otherwise the buckets that
   // actually came back. `payload.interval` is the interval the server used,
@@ -105,7 +109,7 @@ function toLabelledSeries(payload, { dateFrom, dateTo } = {}) {
     usable.forEach((s) => s.points.forEach((p) => seen.add(String(p[0] || ''))));
     labels = [...seen].filter(Boolean).sort();
   }
-  if (!labels.length) return empty();
+  if (!labels.length) return { ...empty(), sensorNames };
 
   const position = new Map(labels.map((label, i) => [label, i]));
 
@@ -125,7 +129,7 @@ function toLabelledSeries(payload, { dateFrom, dateTo } = {}) {
     if (placed) series.push({ label: s.type, values });
   });
 
-  return series.length ? { labels, series } : empty();
+  return series.length ? { labels, series, sensorNames } : { ...empty(), sensorNames };
 }
 
 /**

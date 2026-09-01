@@ -1,4 +1,4 @@
-import { TTL_LIVE, TTL_REFERENCE, cacheKey, cached } from './cache';
+import { TTL_LIVE, cacheKey, cached } from './cache';
 import { getLive } from './endpoints';
 
 /**
@@ -51,21 +51,28 @@ function fetchSite(site) {
   return cached(siteKey(site), () => getLive(site), { ttl: TTL_LIVE });
 }
 
+/**
+ * These two do NOT cache under `sensorsKey`/`valuesKey`.
+ *
+ * Those are the keys the screens' `useQuery` calls own, and caching under them
+ * here made each loader ask `cached` for the very key it was being loaded for —
+ * a cycle that never settles. The shared request below has its own key, which is
+ * where the de-duplication actually belongs.
+ */
 export function loadSiteSensors(site) {
-  return cached(sensorsKey(site), async () => (await fetchSite(site))?.sensors || [], {
-    ttl: TTL_REFERENCE,
-  });
+  return fetchSite(site).then((payload) => payload?.sensors || []);
 }
 
 /**
  * `sensors` is accepted for call-site compatibility and no longer needed — the
  * server returns a value for every sensor at the site, so there is nothing to
  * ask for by name.
+ *
+ * Same rule as above: no `cached` wrapper, or it collides with the screen's key.
  */
 export function loadLiveValues(site, sensors) {
-  return cached(valuesKey(site), async () => (await fetchSite(site))?.values || {}, {
-    ttl: TTL_LIVE,
-  });
+  void sensors;
+  return fetchSite(site).then((payload) => payload?.values || {});
 }
 
 /** Sensors for a site plus their latest values. One call, both halves cached. */

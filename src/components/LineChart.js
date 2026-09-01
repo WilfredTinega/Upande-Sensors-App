@@ -91,8 +91,6 @@ export function LineChart({
     [series, t.series],
   );
 
-  const dropped = Math.max(0, series.length - t.series.length);
-
   const allFinite = useMemo(
     () => resolved.flatMap((s) => s.numbers.filter(Number.isFinite)),
     [resolved],

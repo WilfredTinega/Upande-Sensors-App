@@ -26,15 +26,18 @@
  * against the wrong farm. The app starts with no server and asks for one on
  * first launch; `''` is the honest representation of "not configured yet".
  */
+import { reportReachable, reportUnreachable, resetNetworkState } from './network';
+
 export const NO_BASE_URL = '';
 
 export class FrappeError extends Error {
-  constructor(message, { status, excType, raw } = {}) {
+  constructor(message, { status, excType, raw, kind } = {}) {
     super(message);
     this.name = 'FrappeError';
     this.status = status;
     this.excType = excType;
     this.raw = raw;
+    this.kind = kind;
   }
 
   /** The endpoint exists on this instance but the user may not use it. */
@@ -67,6 +70,18 @@ export class FrappeError extends Error {
    */
   get isAmbiguous403() {
     return this.status === 403 && !this.isMissingEndpoint;
+  }
+
+  /**
+   * The request never completed a round trip.
+   *
+   * Distinct from every other failure here: those are answers, this is the
+   * absence of one. Callers treat it as "not yet" rather than "no" — a screen
+   * keeps its skeleton and retries, instead of reporting that the data does not
+   * exist.
+   */
+  get isOffline() {
+    return this.kind === 'offline';
   }
 
   /**
@@ -144,6 +159,39 @@ function parseSid(setCookieHeader) {
   return sid;
 }
 
+/**
+ * Dev-only request log, so "the app feels slow" can be read off the Metro
+ * console instead of guessed at.
+ *
+ * Prints one line per request with the elapsed time, the response size and a
+ * running count, and marks anything over `SLOW_MS`. Never in a release build,
+ * and never the body: `/api/method/login` carries a password, and the `sid` is
+ * a live session.
+ *
+ * A phone on mobile data pays a far larger round trip than a server does, which
+ * is why the count matters as much as any single duration — four sequential
+ * requests can feel slow while every one of them is individually fine.
+ */
+const DEBUG_TIMING = typeof __DEV__ !== 'undefined' && __DEV__;
+const SLOW_MS = 1500;
+let requestCount = 0;
+
+function logTiming(path, ms, bytes, status) {
+  if (!DEBUG_TIMING) return;
+  requestCount += 1;
+  // Just the method or resource, without the query string — those carry site
+  // names and date ranges that make the log unreadable at a glance.
+  const label = String(path).split('?')[0].replace(/^\/api\/(method|resource)\//, '');
+  const slow = ms >= SLOW_MS ? '  ← SLOW' : '';
+  const size = bytes >= 1024 ? `${Math.round(bytes / 1024)}KB` : `${bytes}B`;
+  console.log(`[api ${String(requestCount).padStart(3)}] ${String(Math.round(ms)).padStart(5)}ms  ${size.padStart(6)}  ${status}  ${label}${slow}`);
+}
+
+/** Requests so far this session — for a screen that wants to report its cost. */
+export function requestsMade() {
+  return requestCount;
+}
+
 /** Frappe wants scalars flat and everything else JSON-encoded. */
 function encodeParams(params = {}) {
   const search = new URLSearchParams();
@@ -161,6 +209,8 @@ export class FrappeClient {
     this.sid = null;
     this.credentials = null; // held in memory only, for the silent re-login path
     this.onSessionLost = null;
+    /** Whether this base URL has ever answered — see the network error below. */
+    this.reachedOnce = false;
   }
 
   setBaseUrl(baseUrl) {
@@ -168,6 +218,10 @@ export class FrappeClient {
     if (next !== this.baseUrl) {
       this.baseUrl = next;
       this.sid = null;
+      // A new address has proved nothing yet, and past failures said nothing
+      // about it.
+      this.reachedOnce = false;
+      resetNetworkState();
     }
   }
 
@@ -209,6 +263,8 @@ export class FrappeClient {
       signal?.removeEventListener?.('abort', forwardAbort);
     };
 
+    const startedAt = Date.now();
+
     let response;
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
@@ -220,6 +276,7 @@ export class FrappeClient {
       });
     } catch (err) {
       cleanup();
+      logTiming(path, Date.now() - startedAt, 0, err.name === 'AbortError' ? 'abort' : 'fail');
       if (err.name === 'AbortError') {
         if (timedOut) {
           throw new FrappeError('The server took too long to respond. Check your connection.');
@@ -230,9 +287,28 @@ export class FrappeClient {
         aborted.name = 'AbortError';
         throw aborted;
       }
-      throw new FrappeError(`Cannot reach ${this.baseUrl}. Check the site URL and your connection.`);
+      /**
+       * Two different failures, told apart by whether this server has ever
+       * answered us.
+       *
+       * Blaming the address is right exactly once — before the first successful
+       * response, when a typo is the likely cause. After that the address is
+       * demonstrably correct, and telling somebody to check it while their train
+       * goes through a tunnel sends them to re-type a URL that was never wrong.
+       */
+      reportUnreachable();
+      throw new FrappeError(
+        this.reachedOnce
+          ? 'No connection to the server. Check your internet connection.'
+          : `Cannot reach ${this.baseUrl}. Check the address and your internet connection.`,
+        { status: 0, kind: 'offline' },
+      );
     }
     cleanup();
+
+    // Answered, whatever the status: a 403 is proof the network is fine.
+    this.reachedOnce = true;
+    reportReachable();
 
     // A rotated sid (Frappe reissues on login and occasionally on renewal)
     // must be adopted or every following request 403s.
@@ -240,6 +316,8 @@ export class FrappeClient {
     if (rotated) this.sid = rotated;
 
     const text = await response.text();
+    logTiming(path, Date.now() - startedAt, text.length, response.status);
+
     let payload = null;
     try {
       payload = text ? JSON.parse(text) : null;

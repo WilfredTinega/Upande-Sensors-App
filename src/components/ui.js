@@ -53,22 +53,53 @@ export function SectionTitle({ children, hint }) {
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 
-export function Button({ label, onPress, disabled, loading, tone = 'accent', compact, style }) {
+/**
+ * `progress` (0..1) turns the button itself into the progress indicator: the
+ * fill advances left to right behind the label.
+ *
+ * Why here rather than a bar underneath: a long download left the button greyed
+ * out with a spinner, which reads as frozen — a spinner says "working" but not
+ * "getting anywhere", and the greying says "not available". A fill that moves is
+ * the one thing that shows both. It also keeps the count, the percentage and the
+ * motion in the single place the eye is already on.
+ *
+ * A button showing progress is not dimmed, whatever `disabled` says, because
+ * dimming is how this control communicates "you cannot use this" and that is not
+ * what is happening.
+ */
+export function Button({
+  label,
+  onPress,
+  disabled,
+  loading,
+  tone = 'accent',
+  compact,
+  style,
+  progress = null,
+}) {
   const t = useTheme();
+  const busy = progress != null;
+  const fillColour =
+    tone === 'danger' ? t.status.critical : tone === 'ghost' ? t.textMuted : t.accent;
   const background =
     tone === 'accent' ? t.accent : tone === 'danger' ? t.status.critical : t.surfaceSunken;
   const foreground = tone === 'ghost' ? t.textPrimary : t.onAccent;
+  // Clamped: a server that over-reports Content-Length would otherwise push the
+  // fill past the button's own edge.
+  const fraction = busy ? Math.max(0, Math.min(1, progress)) : 0;
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ disabled: !!disabled || !!loading }}
+      accessibilityState={{ disabled: !!disabled || !!loading, busy }}
+      accessibilityValue={busy ? { min: 0, max: 100, now: Math.round(fraction * 100) } : undefined}
       onPress={onPress}
       disabled={disabled || loading}
       style={({ pressed }) => [
         {
-          backgroundColor: background,
-          opacity: disabled ? 0.45 : pressed ? 0.85 : 1,
+          // While filling, the button's own background is the unfilled track.
+          backgroundColor: busy ? t.surfaceSunken : background,
+          opacity: disabled && !busy ? 0.45 : pressed ? 0.85 : 1,
           borderRadius: radius.md,
           // `compact` is for secondary controls like pagination, where a
           // full-height button dominates the row it sits under.
@@ -78,12 +109,38 @@ export function Button({ label, onPress, disabled, loading, tone = 'accent', com
           justifyContent: 'center',
           flexDirection: 'row',
           gap: spacing.sm,
+          // Keeps the fill inside the rounded corners.
+          overflow: 'hidden',
         },
         style,
       ]}
     >
-      {loading ? <ActivityIndicator size="small" color={foreground} /> : null}
-      <Text style={[compact ? type.caption : type.heading, { color: foreground }]}>{label}</Text>
+      {busy ? (
+        <View
+          // Behind the label, and never intercepting a press.
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: `${fraction * 100}%`,
+            backgroundColor: fillColour,
+          }}
+        />
+      ) : null}
+      {loading && !busy ? <ActivityIndicator size="small" color={foreground} /> : null}
+      <Text
+        style={[
+          compact ? type.caption : type.heading,
+          // Over a partly-filled track the label has to read against both
+          // halves, so it keeps the on-accent colour rather than following the
+          // track underneath it.
+          { color: busy ? t.onAccent : foreground },
+        ]}
+      >
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -534,7 +591,16 @@ export function StatTile({ label, value, unit, accent, selected, style }) {
       style={[
         {
           flex: 1,
-          minWidth: 92,
+          /**
+           * Shrinkable, not 92dp wide.
+           *
+           * `minWidth: 92` plus the row's `flexWrap` meant four tiles could not
+           * fit a narrow phone and the last one dropped to a second line — a
+           * ragged row where the whole point is a comparable set. `minWidth: 0`
+           * lets flex divide the space evenly however many there are, and the
+           * text below truncates rather than forcing the box wider.
+           */
+          minWidth: 0,
           backgroundColor: selected ? t.surfaceSunken : t.surface,
           borderRadius: radius.md,
           // The series colour is carried by the border and the value itself,
@@ -542,7 +608,7 @@ export function StatTile({ label, value, unit, accent, selected, style }) {
           borderWidth: selected ? 2 : StyleSheet.hairlineWidth,
           borderColor: accent || t.border,
           paddingVertical: spacing.md,
-          paddingHorizontal: spacing.md,
+          paddingHorizontal: spacing.sm,
         },
         style,
       ]}
@@ -551,11 +617,24 @@ export function StatTile({ label, value, unit, accent, selected, style }) {
         {label}
       </Text>
       <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 3, marginTop: 2 }}>
-        <Text style={[type.title, { color: empty ? t.textMuted : accent || t.textPrimary }]}>
+        {/* The number shrinks before the row does. `adjustsFontSizeToFit` keeps
+            a long reading legible in a narrow tile instead of ellipsing the
+            digits, which would make it unreadable rather than merely small. */}
+        <Text
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.7}
+          style={[
+            type.title,
+            { color: empty ? t.textMuted : accent || t.textPrimary, flexShrink: 1 },
+          ]}
+        >
           {empty ? '—' : value}
         </Text>
         {unit && !empty ? (
-          <Text style={[type.caption, { color: t.textSecondary }]}>{unit}</Text>
+          <Text numberOfLines={1} style={[type.caption, { color: t.textSecondary }]}>
+            {unit}
+          </Text>
         ) : null}
       </View>
     </View>

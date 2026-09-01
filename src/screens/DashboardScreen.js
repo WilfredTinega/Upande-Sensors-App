@@ -17,18 +17,24 @@ import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { isStale, relativeTime } from '../utils/dates';
-import { sortByMeasure } from '../utils/measures';
+import { shortMeasureLabel, sortByMeasure } from '../utils/measures';
 
 /** One physical node, with every parameter it reports. */
 function SensorCard({ sensor, live, unitForType, pending }) {
   const t = useTheme();
-  const raw = live?.params?.length
-    ? live.params
-    : live
-      ? [{ type: '', value: live.value, uom: live.uom, ts: live.ts }]
-      : [];
-
-  const params = useMemo(() => sortByMeasure(raw, (p) => p.type), [raw]);
+  /**
+   * Memoised because the fallbacks are fresh array literals: a sensor reporting
+   * a single unnamed parameter, or none at all, produced a new `raw` on every
+   * render, so the sort below re-ran every time for a list that had not changed.
+   */
+  const params = useMemo(() => {
+    const raw = live?.params?.length
+      ? live.params
+      : live
+        ? [{ type: '', value: live.value, uom: live.uom, ts: live.ts }]
+        : [];
+    return sortByMeasure(raw, (p) => p.type);
+  }, [live]);
 
   const latestTs = params.reduce((newest, p) => (p.ts > (newest || '') ? p.ts : newest), null);
   const stale = isStale(latestTs);
@@ -90,8 +96,11 @@ function SensorCard({ sensor, live, unitForType, pending }) {
             const unit = param.uom || unitForType(param.type) || unitForType(sensor.sensor_type);
             return (
               <View key={`${param.type || 'value'}-${i}`} style={{ minWidth: 76 }}>
-                <Text style={[type.caption, { color: t.textSecondary }]}>
-                  {param.type || 'Reading'}
+                <Text numberOfLines={1} style={[type.caption, { color: t.textSecondary }]}>
+                  {/* Same short forms as the chart tiles — these sit three and
+                      four to a row on a sensor card, where "Soil Temperature"
+                      is what pushes the row onto a second line. */}
+                  {shortMeasureLabel(param.type) || 'Reading'}
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 3 }}>
                   <Text
