@@ -493,29 +493,31 @@ const distance = (touches) => {
  * The blueprint at its aspect ratio, with pins and markers over it, inside a
  * pan + pinch container.
  *
+ * Fit to HEIGHT, not width: a plan is read top-to-bottom, and the old
+ * fit-to-width rule shrank a tall or wide blueprint further still to keep it
+ * inside a short height cap, which is exactly backwards for reading it. The
+ * full height is used instead (0.85 of the window, a rough allowance for the
+ * header/tab bar/chips/caption around it — the same kind of fraction-of-window
+ * heuristic the old cap used, just sized to fill rather than to shrink); width
+ * follows the image's own ratio and can run past the screen, which is what the
+ * horizontal `ScrollView` below is for.
+ *
  * `Animated.Value`s for scale and offset, driven straight from the responder so
  * nothing re-renders mid-gesture; the pins read `inverseScale` from the same
- * values. Panning only claims the gesture once zoomed in (or with two fingers),
- * so at 1× a vertical drag still scrolls the page underneath.
+ * values. Panning only claims the gesture once zoomed in (or with two fingers);
+ * at 1× a single-finger drag is left to the surrounding `ScrollView`s — the
+ * outer one vertically, this stage's own one horizontally.
  */
 function BlueprintStage({ uri, headers, imageSize, placements, markers, readings, doorStates, unitForType, onSelect }) {
   const t = useTheme();
   const { height: windowHeight } = useWindowDimensions();
-  const [boxWidth, setBoxWidth] = useState(0);
 
-  // Fit the image to the available width, capped so a tall portrait plan does
-  // not push everything else off screen; pins position against the fitted box.
   const fitted = useMemo(() => {
-    if (!boxWidth || !imageSize?.width || !imageSize?.height) return null;
-    const maxH = Math.max(240, windowHeight * 0.62);
-    let w = boxWidth;
-    let h = (w * imageSize.height) / imageSize.width;
-    if (h > maxH) {
-      h = maxH;
-      w = (h * imageSize.width) / imageSize.height;
-    }
-    return { width: Math.round(w), height: Math.round(h) };
-  }, [boxWidth, imageSize, windowHeight]);
+    if (!imageSize?.width || !imageSize?.height) return null;
+    const h = Math.max(240, Math.round(windowHeight * 0.85));
+    const w = Math.round((h * imageSize.width) / imageSize.height);
+    return { width: w, height: h };
+  }, [imageSize, windowHeight]);
 
   const scale = useRef(new Animated.Value(1)).current;
   const translateX = useRef(new Animated.Value(0)).current;
@@ -619,54 +621,63 @@ function BlueprintStage({ uri, headers, imageSize, placements, markers, readings
 
   return (
     <View
-      onLayout={(e) => setBoxWidth(e.nativeEvent.layout.width)}
       style={{
         width: '100%',
-        alignItems: 'center',
         overflow: 'hidden',
         borderRadius: radius.md,
         backgroundColor: t.surfaceSunken,
-        minHeight: fitted ? fitted.height : 240,
+        height: fitted ? fitted.height : 240,
       }}
-      {...responder.panHandlers}
     >
       {fitted ? (
-        <Animated.View
-          style={{
-            width: fitted.width,
-            height: fitted.height,
-            transform: [{ translateX }, { translateY }, { scale }],
-          }}
+        // Horizontal only: the page's own ScrollView already covers vertical,
+        // and the stage is exactly `fitted.height` tall, so there is nothing
+        // to scroll in that direction here. A plan narrower than the screen is
+        // centred rather than pinned to the left edge.
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ minWidth: '100%', justifyContent: 'center' }}
+          style={{ height: fitted.height }}
         >
-          <Pressable onPress={onStagePress} style={StyleSheet.absoluteFill}>
-            <Image
-              source={{ uri, headers }}
-              style={{ width: fitted.width, height: fitted.height }}
-              resizeMode="contain"
-              accessibilityLabel="Floor plan blueprint"
-            />
-          </Pressable>
-          {/* Markers under the pins, as on the web: pins carry live values. */}
-          {(markers || []).map((m, i) => (
-            <Anchored key={`m-${m.name || i}`} x={m.pos_x} y={m.pos_y} inverseScale={inverseScale} zIndex={2}>
-              <MarkerPin
-                marker={m}
-                doorState={m.sensor_name ? doorStates?.[m.sensor_name] : null}
-                onPress={() => onSelect({ kind: 'marker', marker: m, doorState: m.sensor_name ? doorStates?.[m.sensor_name] : null })}
+          <Animated.View
+            style={{
+              width: fitted.width,
+              height: fitted.height,
+              transform: [{ translateX }, { translateY }, { scale }],
+            }}
+            {...responder.panHandlers}
+          >
+            <Pressable onPress={onStagePress} style={StyleSheet.absoluteFill}>
+              <Image
+                source={{ uri, headers }}
+                style={{ width: fitted.width, height: fitted.height }}
+                resizeMode="contain"
+                accessibilityLabel="Floor plan blueprint"
               />
-            </Anchored>
-          ))}
-          {(placements || []).map((p, i) => (
-            <Anchored key={`p-${p.sensor_name || i}`} x={p.pos_x} y={p.pos_y} inverseScale={inverseScale} zIndex={3}>
-              <SensorPin
-                placement={p}
-                reading={readings?.[p.sensor_name]}
-                unitForType={unitForType}
-                onPress={() => onSelect({ kind: 'sensor', placement: p, reading: readings?.[p.sensor_name] })}
-              />
-            </Anchored>
-          ))}
-        </Animated.View>
+            </Pressable>
+            {/* Markers under the pins, as on the web: pins carry live values. */}
+            {(markers || []).map((m, i) => (
+              <Anchored key={`m-${m.name || i}`} x={m.pos_x} y={m.pos_y} inverseScale={inverseScale} zIndex={2}>
+                <MarkerPin
+                  marker={m}
+                  doorState={m.sensor_name ? doorStates?.[m.sensor_name] : null}
+                  onPress={() => onSelect({ kind: 'marker', marker: m, doorState: m.sensor_name ? doorStates?.[m.sensor_name] : null })}
+                />
+              </Anchored>
+            ))}
+            {(placements || []).map((p, i) => (
+              <Anchored key={`p-${p.sensor_name || i}`} x={p.pos_x} y={p.pos_y} inverseScale={inverseScale} zIndex={3}>
+                <SensorPin
+                  placement={p}
+                  reading={readings?.[p.sensor_name]}
+                  unitForType={unitForType}
+                  onPress={() => onSelect({ kind: 'sensor', placement: p, reading: readings?.[p.sensor_name] })}
+                />
+              </Anchored>
+            ))}
+          </Animated.View>
+        </ScrollView>
       ) : (
         <Skeleton height={240} radius={radius.md} />
       )}
@@ -845,7 +856,7 @@ export function FloorPlanScreen() {
             />
           </Card>
           <Text style={[type.caption, { color: t.textMuted, textAlign: 'center' }]}>
-            Pinch to zoom · drag to pan · double-tap to reset · tap a pin for details
+            Swipe to scroll · pinch to zoom · double-tap to reset · tap a pin for details
           </Text>
         </>
       )}
