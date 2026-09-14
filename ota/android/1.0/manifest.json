@@ -1,13 +1,13 @@
 {
-  "id": "852209b4-f5b0-40b5-a409-18aecd4ed7ca",
-  "createdAt": "2026-09-14T09:31:47.700Z",
+  "id": "726f3cc0-c323-48ab-bc22-04dd5999722a",
+  "createdAt": "2026-09-14T14:31:42.951Z",
   "runtimeVersion": "1.0",
   "launchAsset": {
-    "hash": "wptf71gfK8VSCUe8PHOlc6MuT8cPQ-psVlU_Er46eUA",
+    "hash": "IrbejnPgNdU_XGm6rVaK07F2AmUNWafWBNxoSSOtA9U",
     "key": "bundle",
     "contentType": "application/javascript",
     "fileExtension": ".hbc",
-    "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/1.0/_expo/static/js/android/index-39a90f1ac6bc876e3e150a26239a0a7f.hbc"
+    "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/1.0/_expo/static/js/android/index-ffd945ecf0995a81023b38eb46394d63.hbc"
   },
   "assets": [
     {
@@ -263,16 +263,30 @@
       "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/1.0/assets/286d67d3f74808a60a78d3ebf1a5fb57"
     },
     {
+      "hash": "YeirpaTpgf4iz3yOi82-oAR251xiw38Bv37jM2HWhCg",
+      "key": "assets/6e435534bd35da5fef04168860a9b8fa",
+      "contentType": "application/octet-stream",
+      "fileExtension": ".ttf",
+      "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/1.0/assets/6e435534bd35da5fef04168860a9b8fa"
+    },
+    {
       "hash": "s132WorAHinNMrWZskIsOJ47WcZZfWQ5fEXqOp67Elg",
       "key": "assets/d18e9d6a56e6d8e334843d3c51103e90",
       "contentType": "application/octet-stream",
       "fileExtension": ".png",
       "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/1.0/assets/d18e9d6a56e6d8e334843d3c51103e90"
+    },
+    {
+      "hash": "7xSfCL3S_wmk4shXNHa3sPP7sVtiOVSt5ZiZ5xdb7do",
+      "key": "assets/4e85bc9ebe07e0340c9c4fc2f6c38908",
+      "contentType": "application/octet-stream",
+      "fileExtension": ".ttf",
+      "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/1.0/assets/4e85bc9ebe07e0340c9c4fc2f6c38908"
     }
   ],
   "metadata": {},
   "extra": {
-    "appVersion": "1.0.11",
-    "publishedAt": "2026-09-14T09:31:47.712Z"
+    "appVersion": "1.0.12",
+    "publishedAt": "2026-09-14T14:31:42.967Z"
   }
 }
