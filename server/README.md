@@ -87,6 +87,10 @@ replaced. Params and response shapes are identical across the first two columns.
 | `assignable_users` | `assignable_users` | GET | `desk.search.search_link`, `get_list` on User |
 | `dashboard_health` | `dashboard_health` | GET | new: `site, stale_minutes` → `{stale_minutes, tabs: {<Sensor Setting row name>: {total, active, stale, last_reading, scope}}, site}` |
 | `floor_plans` | `floor_plans` | GET | `flow_plan.list_flow_plans`, `get_flow_plan`, `get_live_readings`, `get_door_stats` |
+| `sensors_for_location` | `sensors_for_location` | GET | new: `site, search` → `{rows: [{name, sensor_name, sensor_site, sensor_type, monitoring, latitude, longitude, location_accuracy_m, location_samples, location_updated_on, location_updated_by, has_location}], total}` |
+| `set_sensor_location` | `set_sensor_location` | **POST** | new: `sensor, latitude, longitude, accuracy_m, samples, device` → the updated row + `history_name`, `previous` |
+| `sensor_location_history` | `sensor_location_history` | GET | new: `sensor, start, page_length` → `{rows: [{latitude, longitude, accuracy_m, samples, source, device, user, recorded_at, previous_latitude, previous_longitude}], total, supported}` |
+| `sensor_map` | `sensor_map` | GET | new: `site, stale_minutes` → `{stale_minutes, sensors: [{…, latitude, longitude, location_accuracy_m, last_reading, online, values: {<type>: {value, unit, ts}}}], center, map: {mapbox_token}}` |
 | `register_push_token` | — | **POST** | new: `token, platform, device, app_version` → Expo push registration |
 | `unregister_push_token` | — | **POST** | new: `token` |
 | `alerts` | — | GET | new: `site, since_days=7, start, page_length` → `{ rows, total }` of limit breaches |
@@ -175,6 +179,65 @@ proxies the Expo Updates manifest from GitHub Pages and adds the
 enforced once with a sentence explaining it rather than arriving as an
 ambiguous 403.
 
+### Sensor coordinates and map
+
+`sensors_for_location`, `set_sensor_location`, `sensor_location_history` and
+`sensor_map` serve the app's **Set coordinates** and **Sensor list** screens.
+They share one block of code — between `# ── Location block` and `# ── end of
+the shared location block` — copied byte-identically into the four files for
+the same reason the tab gate is: a Server Script cannot import another. Change
+one, change all four.
+
+What the block decides:
+
+- **Who may write.** `can_set_location()` is true for the Administrator or a
+  System Manager — nothing else — read from `Has Role` directly
+  (`frappe.get_roles` is not in the sandbox). It is the same rule as
+  `config().app.can_set_location`, which hides the button on the phone;
+  `set_sensor_location` refuses everyone else with a `PermissionError`, so
+  hiding the button is enough. Reading is scoped like
+  every other script here — Sensor Site User Permissions, narrowed by Sensor
+  grants.
+- **What "has a location" means.** `has_coords` is false for NULL *and* for
+  0,0: an untouched Float pair reads as 0,0, and 0,0 is a point in the Gulf of
+  Guinea. `set_sensor_location` refuses 0,0 outright, and latitudes outside
+  ±90 / longitudes outside ±180.
+- **Which columns exist.** The five `location_*` columns on Sensor
+  (`location_accuracy_m`, `location_samples`, `location_updated_on`,
+  `location_updated_by`, `location_source`) and the **Sensor Location History**
+  doctype are new in `upande_sensors`. Every read and write is guarded by
+  `frappe.get_meta("Sensor").has_field(...)` / `frappe.db.exists("DocType",
+  ...)`: an older site gets its coordinates written and nulls for the rest,
+  never a 500 over a column it does not have. A `location_*` value of 0 is
+  reported as null too — the columns default to 0, and "±0 m from 0 fixes" is
+  a precision claim nobody made.
+- **The site link** is `Sensor.sensor_location` on current sites and
+  `sensor_site` on some older ones; the response always says `sensor_site`.
+
+`set_sensor_location` writes with `frappe.db.set_value`, not a document save:
+the Sensor controller's validation is about commissioning (DevEUI, application
+key), and a save would refuse a legacy row that fails a rule added since it was
+created — leaving the installer unable to place it. Each save inserts a Sensor
+Location History row carrying the position it replaced, where the doctype
+exists.
+
+`sensor_map` returns only sensors WITH coordinates, and `online` is the Home
+tiles' rule — newest reading inside `stale_minutes`, else Sensor Settings →
+Stale After, else 120 — so the dot on the map and the count on Home agree. The
+latest value per measure is the `live` query by `sensor_name` only (a
+reading's `site_name` and the registry's site can disagree), over 30 days and
+widened once to 400 when the window is empty. `map.mapbox_token` is Sensor
+Settings → Mapbox Access Token read through `doc.get_password(...,
+raise_exception=False)` — a Password field; the sandbox has no
+`frappe.utils.password`. Empty means the phone draws OpenStreetMap tiles.
+
+Tested on the local `sensors` site the way the section below describes: all
+four `_compile_code` and `safe_exec` as Administrator (reads with and without
+`site` and `search`; the POST by docname, by `sensor_name`, and as an
+overwrite returning `previous`), the refusals (GET, 0,0, latitude 95, and an
+`IoT User` account), and the value lookup with a Sensor inserted for a
+reporting `sensor_name` inside a rolled-back transaction.
+
 ## Deploying
 
 The credentials are read from the environment and are never written to a file
@@ -246,6 +309,10 @@ Python. What actually bites:
   `dashboard_health.py` — a script cannot import another script, so a `diff`
   between any two of those blocks being empty is the only guarantee the five
   endpoints answer the same question. Change one, change all five.
+- **The location block is duplicated the same way**, across
+  `sensors_for_location.py`, `set_sensor_location.py`,
+  `sensor_location_history.py` and `sensor_map.py` — see "Sensor coordinates
+  and map" above. Change one, change all four.
 
 ### Testing before deploying
 

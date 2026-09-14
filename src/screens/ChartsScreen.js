@@ -373,7 +373,23 @@ function ChartsTabScreen() {
 
       {showSkeleton ? <SkeletonChart /> : null}
 
-      {!showSkeleton && !trend.error ? (
+      {/*
+        "All sites" is a real, useful choice on Home, Live and the map — a
+        combined LIST still means something there. A chart is different: it
+        does not list rows, it AVERAGES them into one line per bucket, and
+        blending readings from unrelated farms into a single number would be a
+        confident, wrong answer rather than an honest "nothing here" — Nairobi
+        and Kuehne Nagel do not share a temperature. So this screen still asks
+        for one site, and says so plainly rather than silently showing nothing.
+      */}
+      {!showSkeleton && !trend.error && site === null ? (
+        <EmptyState
+          title="Pick a site to see its dashboard"
+          message="A chart averages readings into one line, and mixing sites together would blend unrelated farms into a single misleading number. Choose one site from the filter above."
+        />
+      ) : null}
+
+      {!showSkeleton && !trend.error && site !== null ? (
         /* Full-bleed: the negative margin cancels the scroll view's padding so
            the plot spans the screen. Side borders and corner radius go with it,
            since a card edge running off-screen reads as a rendering fault. */

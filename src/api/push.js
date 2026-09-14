@@ -2,15 +2,16 @@
  * Push notifications for limit breaches.
  *
  * The server watches readings against the limits configured per monitoring
- * and, when one is crossed, sends a push through the Expo push service to every
- * device registered for the site — `data: { type: 'limit_alert', alert, site,
+ * and, when one is crossed, sends a push — through Firebase directly, or the
+ * Expo push service, whichever the device registered with — to every device
+ * registered for the site: `data: { type: 'limit_alert', alert, site,
  * sensor_name, measure }` on the Android channel `alerts`. This module is the
- * device's half: get a token, hand it to the server, and take the user to the
- * site's live readings when they tap the notification.
+ * device's half: get a token, hand it to the server, and open the
+ * Notifications list when the user taps one.
  *
  * Everything here is failure-silent by design. Registration runs right after
  * sign-in, and nothing about signing in may depend on it: a phone with
- * notifications denied, a build without an Expo project id, an emulator, Expo
+ * notifications denied, a build without Firebase credentials, an emulator, Expo
  * Go, or a server that predates the endpoints must each land on a status the
  * Account screen can explain — never on an error in the user's face.
  *
@@ -25,16 +26,27 @@
  * or in a development bundle. Importing this file runs no expo-notifications
  * code at all.
  *
- * ── Why a projectId is needed, and what happens without one ─────────────────
+ * ── Two token providers: Firebase first, Expo when configured ─────────────
  *
- * An Expo push token is minted by Expo's service for a specific EAS project,
- * so `getExpoPushTokenAsync` needs `extra.eas.projectId` (written by `eas
- * init`) and, on Android, Firebase credentials in the build plus an FCM V1
- * service-account key uploaded to that project. Until the repository has been
- * set up that way the app has nothing to register with, and this module reports
- * `unconfigured` rather than throwing — the in-app alerts card on Home still
- * works, because that reads the server directly. README.md → "Push
- * notifications" lists the setup.
+ * A device can hand the server one of two kinds of token:
+ *
+ *   - `fcm`  — the raw Firebase Cloud Messaging registration token, from
+ *              `getDevicePushTokenAsync()`. Android push is FCM underneath
+ *              whatever sits on top, so this is the shortest path: the build
+ *              carries the project's `google-services.json`, the server holds
+ *              that project's service-account key, and nothing else is in the
+ *              loop. This is the default.
+ *   - `expo` — a token minted by Expo's push service for an EAS project. Only
+ *              attempted when `extra.eas.projectId` is present (written by
+ *              `eas init`); the server then relays through Expo, which needs
+ *              the FCM key uploaded to the EAS project instead.
+ *
+ * Without `google-services.json` in the build, Firebase never initialises and
+ * the FCM call rejects with `E_REGISTRATION_FAILED` ("Unable to get Firebase
+ * Messaging instance. Did you configure `googleServicesFile`…"). That is not a
+ * fault, it is a build that was never set up for push: it lands on
+ * `unconfigured`, is logged once in development, and the Account row says what
+ * to add. README.md → "Push notifications" is the setup.
  */
 
 import Constants from 'expo-constants';
@@ -67,7 +79,10 @@ export const PUSH_STATUS = {
   ON: 'on',
   /** The user declined notifications, now or previously. */
   DENIED: 'denied',
-  /** No `extra.eas.projectId` — the build cannot mint a token. */
+  /**
+   * The build carries neither `google-services.json` (so Firebase cannot hand
+   * out an FCM token) nor an `extra.eas.projectId` (so Expo cannot mint one).
+   */
   UNCONFIGURED: 'unconfigured',
   /** Running in Expo Go, which has no remote push at all since SDK 53. */
   EXPO_GO: 'expo_go',
@@ -79,7 +94,19 @@ export const PUSH_STATUS = {
   FAILED: 'failed',
 };
 
-let state = { status: PUSH_STATUS.UNKNOWN, token: null, message: null };
+/** Which service the registered token belongs to; the server routes by it. */
+export const PUSH_PROVIDER = {
+  FCM: 'fcm',
+  EXPO: 'expo',
+};
+
+/**
+ * `provider` is set only alongside `ON`: the Account row names the service
+ * the phone is actually reachable through, which is the one fact that
+ * distinguishes "alerts on" on a Firebase build from "alerts on" on an EAS one
+ * when a push fails to arrive.
+ */
+let state = { status: PUSH_STATUS.UNKNOWN, token: null, provider: null, message: null };
 const listeners = new Set();
 
 function setState(next) {
@@ -142,6 +169,57 @@ function projectIdForThisBuild() {
 }
 
 /**
+ * The FCM call's way of saying "no Firebase in this build".
+ *
+ * expo-notifications rejects with `E_REGISTRATION_FAILED` and a message that
+ * names `googleServicesFile` when `FirebaseMessaging.getInstance()` throws
+ * (Firebase initialises itself from `google-services.json` at app start; with
+ * no file there is no default app). The code alone is also what a transient
+ * Firebase failure would carry, so the message is checked too: only the
+ * missing-configuration wording is allowed to turn into `unconfigured`.
+ * Anything else stays `failed`, with its message, so a real fault is not filed
+ * under "not set up".
+ */
+function isFirebaseNotConfigured(err) {
+  const text = String(err?.message || '');
+  if (/googleServicesFile|FirebaseApp is not initialized|Default FirebaseApp/i.test(text)) return true;
+  return err?.code === 'E_REGISTRATION_FAILED' && /firebase/i.test(text);
+}
+
+/**
+ * A token from whichever provider this build can use, or `null` where it can
+ * use neither.
+ *
+ * Expo only when the build names an EAS project — that is the one signal that
+ * someone set the Expo route up, and with it `getExpoPushTokenAsync` would
+ * otherwise fail on the same missing Firebase app the FCM path fails on, with a
+ * less useful message. Everything else asks Firebase directly. Android only for
+ * that path: on iOS `getDevicePushTokenAsync` returns an APNs token, which the
+ * server's FCM sender cannot address without an iOS Firebase app the project
+ * does not have.
+ */
+async function obtainToken(Notifications) {
+  const projectId = projectIdForThisBuild();
+  if (projectId) {
+    const { data } = await Notifications.getExpoPushTokenAsync({ projectId });
+    if (!data) throw new Error('Expo returned no push token.');
+    return { token: data, provider: PUSH_PROVIDER.EXPO };
+  }
+  if (Platform.OS !== 'android') return null;
+  try {
+    const { data } = await Notifications.getDevicePushTokenAsync();
+    if (!data) throw new Error('Firebase returned no push token.');
+    return { token: String(data), provider: PUSH_PROVIDER.FCM };
+  } catch (err) {
+    if (isFirebaseNotConfigured(err)) {
+      logOnce('firebase', err);
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
  * Register this device for the signed-in account.
  *
  * Idempotent and re-runnable: the Account screen's "Turn on" button calls it
@@ -151,18 +229,12 @@ function projectIdForThisBuild() {
 export async function registerForPushNotifications({ appVersion } = {}) {
   try {
     if (IS_EXPO_GO) {
-      setState({ status: PUSH_STATUS.EXPO_GO, token: null, message: null });
+      setState({ status: PUSH_STATUS.EXPO_GO, token: null, provider: null, message: null });
       return state;
     }
     const Notifications = notifications();
     if (!Notifications) {
-      setState({ status: PUSH_STATUS.UNSUPPORTED, token: null, message: null });
-      return state;
-    }
-
-    const projectId = projectIdForThisBuild();
-    if (!projectId) {
-      setState({ status: PUSH_STATUS.UNCONFIGURED, token: null, message: null });
+      setState({ status: PUSH_STATUS.UNSUPPORTED, token: null, provider: null, message: null });
       return state;
     }
 
@@ -184,29 +256,37 @@ export async function registerForPushNotifications({ appVersion } = {}) {
       ({ status: permission } = await Notifications.requestPermissionsAsync());
     }
     if (permission !== 'granted') {
-      setState({ status: PUSH_STATUS.DENIED, token: null, message: null });
+      setState({ status: PUSH_STATUS.DENIED, token: null, provider: null, message: null });
       return state;
     }
 
-    const { data: token } = await Notifications.getExpoPushTokenAsync({ projectId });
-    if (!token) throw new Error('Expo returned no push token.');
+    // Permission before token, deliberately: a build that turns out to have no
+    // Firebase still asked, so the day `google-services.json` ships the
+    // permission is already granted and "Turn on" is one tap, not two.
+    const issued = await obtainToken(Notifications);
+    if (!issued) {
+      setState({ status: PUSH_STATUS.UNCONFIGURED, token: null, provider: null, message: null });
+      return state;
+    }
 
     await registerPushToken({
-      token,
+      token: issued.token,
       platform: Platform.OS,
       device: Device.modelName || null,
       appVersion: appVersion || null,
+      provider: issued.provider,
     });
-    setState({ status: PUSH_STATUS.ON, token, message: null });
+    setState({ status: PUSH_STATUS.ON, token: issued.token, provider: issued.provider, message: null });
   } catch (err) {
     // A server without the endpoint is a version gap, not a fault — the Account
     // screen says so in those words instead of showing Frappe's message.
     if (err instanceof FrappeError && err.isMissingEndpoint) {
-      setState({ status: PUSH_STATUS.UNAVAILABLE, token: null, message: null });
+      setState({ status: PUSH_STATUS.UNAVAILABLE, token: null, provider: null, message: null });
     } else {
       setState({
         status: PUSH_STATUS.FAILED,
         token: null,
+        provider: null,
         message: err?.message || 'Push registration failed.',
       });
     }
@@ -225,7 +305,7 @@ export async function registerForPushNotifications({ appVersion } = {}) {
  */
 export async function unregisterPushNotifications() {
   const { token } = state;
-  setState({ status: PUSH_STATUS.UNKNOWN, token: null, message: null });
+  setState({ status: PUSH_STATUS.UNKNOWN, token: null, provider: null, message: null });
   if (!token) return;
   try {
     await unregisterPushToken(token);
@@ -282,7 +362,8 @@ export function installForegroundHandler() {
  * launched the app.
  *
  * `onAlert({ site, sensorName, measure, alert })` is called for a limit alert;
- * anything else is ignored. The launch response and the live listener can both
+ * anything else is ignored. The caller decides where to go — `PushRegistrar`
+ * opens the Notifications list, where the tapped alert is the top row. The launch response and the live listener can both
  * report the same tap, so responses are de-duplicated by request identifier.
  * Returns the unsubscribe — a no-op function where push is unsupported.
  */
@@ -318,6 +399,45 @@ export function watchNotificationTaps(onAlert) {
       .catch((err) => logOnce('launch response', err));
   } catch (err) {
     logOnce('taps', err);
+  }
+
+  return () => {
+    try {
+      sub?.remove?.();
+    } catch {
+      /* already gone */
+    }
+  };
+}
+
+/**
+ * React to a push ARRIVING, whether or not anyone taps it.
+ *
+ * The header bell's count is polled once a minute, which is fine for a badge
+ * but a poor answer to a notification that just made the phone buzz: the bell
+ * on screen would still read the old number for up to a minute. This fires as
+ * the push lands, and `NotificationsContext` re-counts on it. Only limit alerts
+ * are reported; the rest of the payload is nobody's business here. Returns the
+ * unsubscribe — a no-op where push is unsupported, same rule as the rest.
+ */
+export function watchNotificationsReceived(onReceived) {
+  const Notifications = notifications();
+  if (!Notifications) return () => {};
+
+  let sub = null;
+  try {
+    sub = Notifications.addNotificationReceivedListener((notification) => {
+      const data = notification?.request?.content?.data;
+      if (!data || data.type !== PUSH_TYPE_LIMIT_ALERT) return;
+      onReceived({
+        site: data.site || null,
+        sensorName: data.sensor_name || null,
+        measure: data.measure || null,
+        alert: data.alert || null,
+      });
+    });
+  } catch (err) {
+    logOnce('received', err);
   }
 
   return () => {

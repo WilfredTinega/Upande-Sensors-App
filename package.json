@@ -15,6 +15,7 @@
     "expo-font": "~57.0.4",
     "expo-intent-launcher": "~57.0.1",
     "expo-local-authentication": "~57.0.3",
+    "expo-location": "~57.0.17",
     "expo-notifications": "~57.0.18",
     "expo-secure-store": "~57.0.4",
     "expo-sharing": "~57.0.19",
@@ -26,6 +27,7 @@
     "react-native-screens": "~4.26.0",
     "react-native-svg": "15.15.4",
     "react-native-view-shot": "5.1.0",
+    "react-native-webview": "13.16.1",
     "xlsx": "^0.18.5"
   },
   "scripts": {
@@ -45,12 +47,14 @@
     "server:deploy:dry": "node server/deploy.mjs --dry-run",
     "server:verify": "node server/deploy.mjs --verify",
     "test:cache": "node tests/cache.test.js",
-    "test": "node tests/routeHistory.test.js && node tests/cache.test.js && node tests/updateKind.test.js && node tests/endpointsChain.test.js && node tests/dashboardHealth.test.js",
+    "test": "node tests/routeHistory.test.js && node tests/cache.test.js && node tests/updateKind.test.js && node tests/endpointsChain.test.js && node tests/dashboardHealth.test.js && node tests/alerts.test.js && node tests/geo.test.js",
     "test:update-kind": "node tests/updateKind.test.js",
     "ota:build": "node scripts/publish-ota.mjs",
     "android:emulator": "expo run:android -- -PreactNativeArchitectures=x86_64",
     "test:endpoints-chain": "node tests/endpointsChain.test.js",
-    "test:dashboard-health": "node tests/dashboardHealth.test.js"
+    "test:dashboard-health": "node tests/dashboardHealth.test.js",
+    "test:alerts": "node tests/alerts.test.js",
+    "test:geo": "node tests/geo.test.js"
   },
   "devDependencies": {
     "eslint": "^9.39.5",

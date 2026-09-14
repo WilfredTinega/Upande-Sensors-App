@@ -7,17 +7,18 @@ import {
   watchNotificationTaps,
 } from '../api/push';
 import { useAuth } from '../context/AuthContext';
-import { useDashboard } from '../context/DashboardContext';
 import { APP_VERSION } from '../context/UpdateContext';
-import { goToLive } from '../navigation/ref';
+import { goToNotifications } from '../navigation/ref';
 
 /**
  * Wires push notifications to the signed-in session. Renders nothing.
  *
- * A component rather than an effect in `SignedInApp` because the tap handler
- * needs `setSite` from `DashboardContext`, and `SignedInApp` is the thing that
- * *renders* that provider — it cannot read from it. Mounted inside the provider,
- * this can.
+ * A component rather than an effect in `SignedInApp` so that it lives INSIDE
+ * the providers that tree renders — `SignedInApp` itself cannot read from them,
+ * and the tap handler once needed `setSite` from one. It no longer does (a tap
+ * opens the Notifications list, and the row there selects the site), but the
+ * placement still says the right thing: this exists exactly as long as the
+ * signed-in tree does.
  *
  * Mounting is the trigger: this tree exists only while a session does, so a
  * fresh sign-in and a restored one on cold start both register the same way,
@@ -31,7 +32,6 @@ import { goToLive } from '../navigation/ref';
  */
 export function PushRegistrar() {
   const { user } = useAuth();
-  const { setSite } = useDashboard();
 
   // Re-run when the account changes — a different user on the same phone is a
   // different registration server-side.
@@ -57,14 +57,15 @@ export function PushRegistrar() {
 
   useEffect(() => {
     installForegroundHandler();
-    // A tapped breach lands on the site it happened at, not whichever site was
-    // last selected: the notification is about a place, and Live is where the
-    // current reading for that place is.
-    return watchNotificationTaps(({ site }) => {
-      if (site) setSite(site);
-      goToLive();
+    // A tapped push opens the list, not Live. It used to select the alert's
+    // site and jump to the readings, which answered the one alert and lost
+    // the rest: three breaches overnight are three banners, and the person
+    // tapping the third wants to see all three. The tapped alert is the top
+    // row; tapping IT does what the push tap used to.
+    return watchNotificationTaps(() => {
+      goToNotifications();
     });
-  }, [setSite]);
+  }, []);
 
   return null;
 }

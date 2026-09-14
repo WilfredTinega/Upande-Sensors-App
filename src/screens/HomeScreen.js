@@ -13,14 +13,19 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { Card, EmptyState, SectionTitle, StatusChip } from '../components/ui';
 import { Skeleton } from '../components/Skeleton';
-import { formatTick } from '../components/LineChart';
-import { TTL_LIVE, TTL_SERIES, cacheKey, invalidate } from '../api/cache';
-import { getAlerts, getDashboardHealth } from '../api/endpoints';
+import { TTL_LIVE, cacheKey, invalidate } from '../api/cache';
+import { getDashboardHealth } from '../api/endpoints';
 import { latestStamp, liveKey, loadLiveForSite, siteKey } from '../api/liveSite';
 import { useAuth } from '../context/AuthContext';
 import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
-import { goToAccount, goToLive, goToReadings } from '../navigation/ref';
+import {
+  goToAccount,
+  goToLive,
+  goToReadings,
+  goToSensorLocation,
+  goToSensorMap,
+} from '../navigation/ref';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { font } from '../theme';
 import { isStale, relativeTime } from '../utils/dates';
@@ -78,10 +83,6 @@ function greeting() {
 /** Shared constants, so a pending query doesn't yield a new object per render. */
 const EMPTY_SENSORS = [];
 const EMPTY_LIVE = {};
-const EMPTY_ROWS = [];
-
-/** How many breaches the Home card lists. The rest are on the server. */
-const ALERT_ROWS = 5;
 
 /**
  * One dashboard's counts out of a `dashboard_health` payload, or null.
@@ -125,9 +126,9 @@ export function healthForTab(payload, tab) {
  * The big line used to be the Sensor Settings dashboard title — "Upande
  * Sensors" — which is the same on every site, on every screen, for everybody,
  * and so told the reader nothing they could act on. The selected site is the
- * one fact the whole rest of the screen is scoped by: the status card, the
- * alerts, the per-dashboard counts are all about that site and nothing else, so
- * naming it here is naming the subject of the page.
+ * one fact the whole rest of the screen is scoped by: the status card and the
+ * per-dashboard counts are all about that site and nothing else, so naming it
+ * here is naming the subject of the page.
  *
  * The logo is gone from the card. The header directly above it now carries the
  * mark, and repeating it 60px lower reads as a rendering fault rather than as
@@ -136,12 +137,13 @@ export function healthForTab(payload, tab) {
  * run long ("Kuehne Nagel KN1 & KN2").
  *
  * `pending` is the post-login gap where the site is still being auto-picked. A
- * skeleton there rather than the fallback title, because a title that resolves
- * into a *different* string a moment later is worse than one that visibly
- * hasn't arrived. `fallbackTitle` is for the case with no site at all — a
- * heading is still needed, and the dashboard title is the honest one.
+ * skeleton there rather than a title that resolves into a *different* string a
+ * moment later, which is worse than one that visibly hasn't arrived yet. Once
+ * settled, `site` is either a real name or `null` — "All sites", picked on
+ * purpose from the header filter — and both read straight off `site` itself,
+ * so there is no third, no-site-at-all case left to cover with a fallback.
  */
-function Hero({ site, fallbackTitle, pending, name, message }) {
+function Hero({ site, pending, name, message }) {
   const t = useTheme();
   return (
     <Card style={{ marginBottom: spacing.xl }}>
@@ -152,7 +154,7 @@ function Hero({ site, fallbackTitle, pending, name, message }) {
           <Skeleton width="65%" height={22} radius={radius.sm} />
         ) : (
           <Text numberOfLines={2} style={[type.title, { color: t.textPrimary }]}>
-            {site || fallbackTitle}
+            {site || 'All sites'}
           </Text>
         )}
         <Text numberOfLines={1} style={[type.body, { color: t.textSecondary, marginTop: 2 }]}>
@@ -223,7 +225,9 @@ function SiteStatusCard({ site, pending, counts, newest, error }) {
               Site status
             </Text>
             <Text numberOfLines={1} style={[type.heading, { color: t.textPrimary, marginTop: 2 }]}>
-              {site || 'No site selected'}
+              {/* `site` is null both while still picking AND once "All sites"
+                  has been chosen — `pending` is what tells the two apart. */}
+              {pending ? 'Loading…' : site || 'All sites'}
             </Text>
           </View>
           {pending ? (
@@ -281,31 +285,32 @@ function SiteStatusCard({ site, pending, counts, newest, error }) {
 }
 
 /**
- * "<active> active · <stale> stale" under the tile's sensor count.
+ * "<total> sensors · <active> active · <stale> stale", on one line.
  *
- * The total is NOT repeated here — it is the line above, in full size, because
- * that is the number people came for. This is the breakdown of it, in the same
- * colouring the header's site filter uses: active in green, stale in red only
- * when there is any.
+ * The total leads because it is the number people came for; the other two are
+ * its breakdown, in the colouring the header's site filter uses — active in
+ * green, stale in red only when there is any. One row rather than two: the
+ * three figures are one fact about the dashboard, and split across lines the
+ * total read as a heading over the breakdown instead of part of it.
  */
 function HealthLine({ health }) {
   const t = useTheme();
   if (!health) return null;
+  const total = Number(health.total) || 0;
+  const small = { fontSize: 10, lineHeight: 14, fontFamily: font('600') };
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-      <Text style={[type.caption, { color: t.status.good, fontSize: 10, fontFamily: font('600') }]}>
+      <Text numberOfLines={1} style={[type.caption, small, { color: t.textSecondary }]}>
+        {total} sensor{total === 1 ? '' : 's'}
+      </Text>
+      <Text style={[type.caption, small, { color: t.textMuted }]}>·</Text>
+      <Text numberOfLines={1} style={[type.caption, small, { color: t.status.good }]}>
         {health.active} active
       </Text>
-      <Text style={[type.caption, { color: t.textMuted, fontSize: 10 }]}>·</Text>
+      <Text style={[type.caption, small, { color: t.textMuted }]}>·</Text>
       <Text
-        style={[
-          type.caption,
-          {
-            color: health.stale ? t.status.critical : t.textMuted,
-            fontSize: 10,
-            fontFamily: font('600'),
-          },
-        ]}
+        numberOfLines={1}
+        style={[type.caption, small, { color: health.stale ? t.status.critical : t.textMuted }]}
       >
         {health.stale} stale
       </Text>
@@ -366,31 +371,23 @@ function TabCard({ tab, width, active, onPress, health, healthLoading, showHealt
           sensors ASSIGNED to this dashboard — placed on its floor plan, or
           carrying its Sensor Monitoring Type — and never the site's total.
 
-          Both rows keep their height whatever they contain, so a tile without
+          The row keeps its height whatever it contains, so a tile without
           counts still lines up with the one beside it.
         */}
-        <View style={{ height: 14, marginTop: 2, justifyContent: 'center' }}>
+        <View style={{ height: 16, marginTop: 2, justifyContent: 'center' }}>
           {!showHealth ? null : healthLoading ? (
-            <Skeleton width="55%" height={10} />
-          ) : health ? (
-            <Text
-              numberOfLines={1}
-              style={[type.caption, { color: t.textSecondary, lineHeight: 14, fontFamily: font('600') }]}
-            >
-              {health.total} sensor{health.total === 1 ? '' : 's'}
-            </Text>
-          ) : null}
-        </View>
-        <View style={{ height: 16, justifyContent: 'flex-end' }}>
-          {showHealth && !healthLoading ? <HealthLine health={health} /> : null}
+            <Skeleton width="70%" height={10} />
+          ) : (
+            <HealthLine health={health} />
+          )}
         </View>
       </Card>
     </Pressable>
   );
 }
 
-/** Icon 36 + gap 8 + title 40 + count 16 + breakdown 16 + card padding 32. */
-const TILE_HEIGHT = 148;
+/** Icon 36 + gap 8 + title 40 + counts row 18 + card padding 32. */
+const TILE_HEIGHT = 134;
 
 function QuickLink({ icon, label, onPress }) {
   const t = useTheme();
@@ -471,61 +468,6 @@ function SupportLine({ contact }) {
   );
 }
 
-/**
- * One limit breach: "<sensor> · <Measure> <value><unit> above 2–8", when.
- *
- * `critical` when the reading is still outside its limits as of the newest
- * value on the site — that is a live problem; `warning` once a later reading
- * has come back inside, or when the site has nothing newer to compare against.
- */
-function AlertRow({ row, live, unitForType, last }) {
-  const t = useTheme();
-  const value = Number(row.value);
-  const unit = row.unit || unitForType(row.measure) || '';
-  const lo = row.limit_min;
-  const hi = row.limit_max;
-  const range =
-    lo !== null && lo !== undefined && hi !== null && hi !== undefined
-      ? `${formatTick(Number(lo))}–${formatTick(Number(hi))}`
-      : lo !== null && lo !== undefined
-        ? `min ${formatTick(Number(lo))}`
-        : hi !== null && hi !== undefined
-          ? `max ${formatTick(Number(hi))}`
-          : '';
-
-  // Is the same measure on the same sensor still out of range right now?
-  const current = (live[row.sensor_name]?.params || []).find(
-    (p) => String(p.type || '').toLowerCase() === String(row.measure || '').toLowerCase(),
-  );
-  const now = Number(current?.value);
-  const stillOut =
-    Number.isFinite(now) &&
-    ((lo !== null && lo !== undefined && now < Number(lo)) ||
-      (hi !== null && hi !== undefined && now > Number(hi)));
-
-  return (
-    <View
-      style={{
-        paddingVertical: spacing.sm,
-        borderBottomWidth: last ? 0 : StyleSheet.hairlineWidth,
-        borderBottomColor: t.border,
-      }}
-    >
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-        <Text numberOfLines={1} style={[type.body, { color: t.textPrimary, flex: 1, fontFamily: font('600') }]}>
-          {row.sensor_name || '—'}
-        </Text>
-        <StatusChip tone={stillOut ? 'critical' : 'warning'} label={stillOut ? 'Now' : relativeTime(row.reading_timestamp) || '—'} />
-      </View>
-      <Text numberOfLines={1} style={[type.caption, { color: t.textSecondary, marginTop: 2 }]}>
-        {row.measure || 'Reading'} {Number.isFinite(value) ? formatTick(value) : '—'}
-        {unit ? ` ${unit}` : ''} {row.direction === 'below' ? 'below' : 'above'}
-        {range ? ` ${range}` : ''}
-      </Text>
-    </View>
-  );
-}
-
 /* ── Screen ──────────────────────────────────────────────────────────────── */
 
 export function HomeScreen() {
@@ -541,11 +483,11 @@ export function HomeScreen() {
     selectTab,
     configLoading,
     configError,
-    dashboardTitle,
     welcomeMessage,
     supportContact,
     unitForType,
     refreshReference,
+    appSettings,
   } = useDashboard();
 
   /**
@@ -558,7 +500,7 @@ export function HomeScreen() {
    * under `siteKey`, and keeps a Home-specific outer key for the hook.
    */
   const live = useQuery(
-    site ? cacheKey('home_live', { site }) : null,
+    sitePending ? null : cacheKey('home_live', { site }),
     () => loadLiveForSite(site),
     { ttl: TTL_LIVE },
   );
@@ -587,31 +529,12 @@ export function HomeScreen() {
   const newest = useMemo(() => latestStamp(live.data), [live.data]);
 
   /**
-   * Recent limit breaches for the site.
-   *
-   * The endpoint is app-only and newer than the rest: a server that lacks it
-   * answers `isMissingEndpoint`, and the card is then not shown at all — an
-   * empty "no breaches" card on a server that cannot record breaches would be a
-   * false all-clear.
-   */
-  const alerts = useQuery(
-    site ? cacheKey('home_alerts', { site }) : null,
-    () => getAlerts({ site, sinceDays: 7, pageLength: ALERT_ROWS }),
-    { ttl: TTL_SERIES },
-  );
-  const alertRows = useMemo(
-    () => (Array.isArray(alerts.data?.rows) ? alerts.data.rows : EMPTY_ROWS),
-    [alerts.data],
-  );
-  const alertsUnsupported = Boolean(alerts.error?.isMissingEndpoint);
-
-  /**
-   * Per-dashboard sensor tallies, once per site. App-only like the alerts: on
-   * a server without it the cards simply carry no counts line — a row of
-   * zeros would claim every dashboard is empty.
+   * Per-dashboard sensor tallies, once per site. App-only, newer than the
+   * rest: on a server without it the cards simply carry no counts line — a
+   * row of zeros would claim every dashboard is empty.
    */
   const health = useQuery(
-    site ? cacheKey('dashboard_health', { site }) : null,
+    sitePending ? null : cacheKey('dashboard_health', { site }),
     () => getDashboardHealth(site),
     { ttl: TTL_LIVE },
   );
@@ -621,22 +544,24 @@ export function HomeScreen() {
   const healthUnsupported = Boolean(health.error?.isMissingEndpoint);
 
   const refresh = useCallback(async () => {
-    if (site) {
+    // Gated on `sitePending`, not `site`: "All sites" is `site === null` once
+    // settled, and a pull there must still refresh — it was skipping the
+    // invalidation and the refetch entirely, so pulling to refresh on "All
+    // sites" silently did nothing.
+    if (!sitePending) {
       // `siteKey` is the shared request; leaving it cached would hand the same
       // payload straight back and the pull would fetch nothing. `liveKey` is
       // the Live screen's copy of it, dropped so the two screens agree.
       invalidate(siteKey(site));
       invalidate(liveKey(site));
-      invalidate(cacheKey('home_alerts', { site }));
       invalidate(cacheKey('dashboard_health', { site }));
     }
     await Promise.all([
-      site ? live.refresh() : Promise.resolve(),
-      site && !alertsUnsupported ? alerts.refresh() : Promise.resolve(),
-      site && !healthUnsupported ? health.refresh() : Promise.resolve(),
+      !sitePending ? live.refresh() : Promise.resolve(),
+      !sitePending && !healthUnsupported ? health.refresh() : Promise.resolve(),
       refreshReference(),
     ]);
-  }, [site, live, alerts, alertsUnsupported, health, healthUnsupported, refreshReference]);
+  }, [site, sitePending, live, health, healthUnsupported, refreshReference]);
 
   const pending = sitePending || sitesLoading || live.loading;
   const refreshing = live.refreshing;
@@ -661,7 +586,6 @@ export function HomeScreen() {
     >
       <Hero
         site={site}
-        fallbackTitle={dashboardTitle}
         // Only the pick itself, not the readings: the name is known as soon as
         // the site is, and waiting on `live` would skeleton a settled title.
         pending={sitePending || sitesLoading}
@@ -677,50 +601,9 @@ export function HomeScreen() {
         error={live.error}
       />
 
-      {!alertsUnsupported && site ? (
-        <>
-          <SectionTitle hint="Readings that crossed a configured limit, last 7 days">
-            Recent alerts
-          </SectionTitle>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open live readings"
-            onPress={goToLive}
-            style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1, marginBottom: spacing.xl })}
-          >
-            <Card>
-              {alerts.loading || sitePending ? (
-                <View style={{ gap: spacing.sm }}>
-                  {[0, 1, 2].map((i) => (
-                    <Skeleton key={i} height={34} radius={radius.sm} />
-                  ))}
-                </View>
-              ) : alerts.error ? (
-                <Text style={[type.caption, { color: t.textMuted, lineHeight: 16 }]}>
-                  Alerts could not be loaded — {alerts.error.message}
-                </Text>
-              ) : alertRows.length ? (
-                alertRows.map((row, i) => (
-                  <AlertRow
-                    key={row.name || `${row.sensor_name}-${row.reading_timestamp}-${i}`}
-                    row={row}
-                    live={values}
-                    unitForType={unitForType}
-                    last={i === alertRows.length - 1}
-                  />
-                ))
-              ) : (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-                  <Ionicons name="checkmark-circle-outline" size={18} color={t.status.good} />
-                  <Text style={[type.body, { color: t.textSecondary }]}>
-                    No limit breaches in the last 7 days
-                  </Text>
-                </View>
-              )}
-            </Card>
-          </Pressable>
-        </>
-      ) : null}
+      {/* No alerts card here any more: limit breaches live behind the bell in
+          the header, across every site, where they do not crowd the landing
+          page or vanish when the site filter changes. */}
 
       <SectionTitle>Dashboards</SectionTitle>
       {configLoading ? (
@@ -768,6 +651,16 @@ export function HomeScreen() {
       <View style={{ flexDirection: 'row', gap: spacing.md }}>
         <QuickLink icon="list-outline" label="Readings" onPress={goToReadings} />
         <QuickLink icon="person-circle-outline" label="Account" onPress={goToAccount} />
+      </View>
+      {/* The map for everyone; the coordinate capture only for an account the
+          server says may write them — a button that ends in "not permitted"
+          is worse than no button. Alone on its row, the map link takes the
+          full width rather than leaving a hole beside it. */}
+      <View style={{ flexDirection: 'row', gap: spacing.md, marginTop: spacing.md }}>
+        <QuickLink icon="map-outline" label="Sensor list" onPress={() => goToSensorMap()} />
+        {appSettings?.can_set_location ? (
+          <QuickLink icon="locate-outline" label="Set coordinates" onPress={() => goToSensorLocation()} />
+        ) : null}
       </View>
 
       {supportContact ? <SupportLine contact={supportContact} /> : null}

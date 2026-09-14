@@ -8,9 +8,12 @@ import { ChartsScreen } from '../screens/ChartsScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { HomeScreen } from '../screens/HomeScreen';
 import { LoginScreen } from '../screens/LoginScreen';
+import { NotificationsScreen } from '../screens/NotificationsScreen';
 import { ReadingsScreen } from '../screens/ReadingsScreen';
 import { RouteHistoryScreen } from '../screens/RouteHistoryScreen';
 import { SensorDetailScreen } from '../screens/SensorDetailScreen';
+import { SensorLocationScreen } from '../screens/SensorLocationScreen';
+import { SensorMapAddLocationButton, SensorMapRefreshButton, SensorMapScreen } from '../screens/SensorMapScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { OfflineToast } from '../components/OfflineToast';
 import { FloatingSidebar, SidebarToggle } from '../components/FloatingSidebar';
@@ -20,13 +23,25 @@ import { ReadingsTabIcon } from '../components/TabIcons';
 import { UserAvatar } from '../components/UserAvatar';
 import {
   DashboardHeaderTitle,
-  HeaderSiteFilter,
-  HeaderThemeSwitch,
+  HeaderAccountControls,
+  HeaderSiteControls,
   HomeHeaderTitle,
 } from '../components/HeaderControls';
-import { SENSOR_DETAIL_ROUTE, goToLive, navigationRef, setCurrentRoute } from './ref';
+import {
+  NOTIFICATIONS_ROUTE,
+  SENSOR_DETAIL_ROUTE,
+  SENSOR_LOCATION_ROUTE,
+  SENSOR_MAP_ROUTE,
+  goToLive,
+  leaveNotifications,
+  leaveSensorLocation,
+  leaveSensorMap,
+  navigationRef,
+  setCurrentRoute,
+} from './ref';
 import { recordRoute, setRouteHistoryEnabled } from '../utils/routeHistory';
 import { DashboardProvider } from '../context/DashboardContext';
+import { NotificationsProvider } from '../context/NotificationsContext';
 import { useAuth } from '../context/AuthContext';
 import { useUpdate } from '../context/UpdateContext';
 import { useTheme } from '../hooks/useTheme';
@@ -63,7 +78,16 @@ const ICONS = {
 const SIDEBAR_ROUTES = new Set(['Live', 'Readings', 'Dashboard']);
 
 /** Screens whose data is scoped by the selected site. */
-const SITE_FILTER_ROUTES = new Set(['Home', 'Live', 'Readings', 'Dashboard']);
+const SITE_FILTER_ROUTES = new Set([
+  'Home',
+  'Live',
+  'Readings',
+  'Dashboard',
+  // The two location screens too: the picker lists the site's sensors and the
+  // map draws them, so changing site has to be possible without leaving.
+  SENSOR_LOCATION_ROUTE,
+  SENSOR_MAP_ROUTE,
+]);
 
 /**
  * The one account whose screen visits are not recorded.
@@ -122,209 +146,321 @@ function SignedInApp() {
 
   return (
     <DashboardProvider>
-      <View style={{ flex: 1 }}>
-        <NavigationContainer
-          ref={navigationRef}
-          theme={navTheme}
-          onReady={onRouteChange}
-          onStateChange={onRouteChange}
-        >
-          <Tab.Navigator
-            // Land on Home: the site's status at a glance, then the dashboards
-            // as a grid. Someone opening the app to check on something gets
-            // the answer without choosing a screen first.
-            initialRouteName="Home"
-            screenOptions={({ route }) => ({
-              headerStyle: { backgroundColor: t.surface },
-              headerTitleStyle: {
-                color: t.textPrimary,
-                fontSize: 17,
-                fontWeight: '700',
-                fontFamily: font('700'),
-              },
-              headerShadowVisible: false,
-              // Only the data screens are scoped by a dashboard tab, so only
-              // they get the opener — a list icon on Account would open a
-              // sidebar that changes nothing on screen.
-              headerLeft: SIDEBAR_ROUTES.has(route.name) ? () => <SidebarToggle /> : undefined,
-              // The three site-scoped screens carry the filter in the header,
-              // beside the sidebar button, rather than each repeating it in a
-              // filters card.
-              headerRight: SITE_FILTER_ROUTES.has(route.name)
-                ? () => <HeaderSiteFilter />
-                : route.name === 'Account'
-                  ? () => <HeaderThemeSwitch />
-                  : undefined,
-              tabBarActiveTintColor: t.accent,
-              tabBarInactiveTintColor: t.textMuted,
-              tabBarStyle: { backgroundColor: t.surface, borderTopColor: t.border },
-              /**
-               * Icons alone, no captions.
-               *
-               * Five labels on a narrow phone left ~70dp each and the longest
-               * ("Dashboard") only fitted with the font size pinned at 10pt —
-               * small enough to read as noise under a glyph that already says
-               * the same thing. The label is still set on every screen below:
-               * it feeds the accessibility name, so a screen reader announces
-               * "Readings" even though nothing is drawn.
-               */
-              tabBarShowLabel: false,
-              tabBarAllowFontScaling: false,
-              // flex: 1 on every visible item divides the bar evenly, and the
-              // icon centres in its share now that nothing sits beneath it.
-              tabBarItemStyle: { flex: 1, paddingHorizontal: 2 },
-              tabBarIcon: ({ focused, color, size }) => {
-                // The account tab shows who is signed in — their ERPNext avatar,
-                // or their initials — rather than a generic person glyph.
-                if (route.name === 'Account') {
-                  return (
-                    <View>
-                      <UserAvatar size={size ?? 24} focused={focused} color={color} />
-                      {/* A new APK is the one thing the app must volunteer:
-                          nothing else will tell a field phone it is out of
-                          date. A dot, not a count — there is only ever one
-                          newer version, and the number would mean nothing. */}
-                      {updateAvailable ? (
-                        <View
-                          style={{
-                            position: 'absolute',
-                            top: -1,
-                            right: -1,
-                            width: 10,
-                            height: 10,
-                            borderRadius: 5,
-                            backgroundColor: t.accent,
-                            // Reads as a badge rather than a smudge on top of
-                            // whichever avatar colour is underneath.
-                            borderWidth: 1.5,
-                            borderColor: t.surface,
-                          }}
-                        />
-                      ) : null}
-                    </View>
-                  );
-                }
-                if (route.name === 'Readings') {
-                  return <ReadingsTabIcon size={size ?? 24} color={color} />;
-                }
-                const [active, inactive] = ICONS[route.name] || ICONS.Live;
-                return (
-                  <Ionicons name={focused ? active : inactive} size={size ?? 24} color={color} />
-                );
-              },
-            })}
+      {/* Inside DashboardProvider and around the navigator: the header bell
+          reads it, and so does the Notifications screen. */}
+      <NotificationsProvider>
+        <View style={{ flex: 1 }}>
+          <NavigationContainer
+            ref={navigationRef}
+            theme={navTheme}
+            onReady={onRouteChange}
+            onStateChange={onRouteChange}
           >
-            {/*
-              `title` feeds BOTH the header and the tab label, so a descriptive
-              header title ("Sensor readings") ends up wrapped across two lines
-              in the tab bar. headerTitle and tabBarLabel are set separately so
-              each reads correctly in its own place.
-            */}
-            <Tab.Screen
-              name="Home"
-              component={HomeScreen}
-              // The mark instead of the word — the tab bar's house glyph
-              // already says "Home", so the title is free to be the app.
-              options={{
-                headerTitle: () => <HomeHeaderTitle />,
-                tabBarLabel: 'Home',
-                tabBarAccessibilityLabel: 'Home tab',
-              }}
-            />
-            <Tab.Screen
-              name="Live"
-              component={DashboardScreen}
-              options={{
-                headerTitle: 'Live readings',
-                tabBarLabel: 'Live',
-                tabBarAccessibilityLabel: 'Live readings tab',
-              }}
-            />
-            <Tab.Screen
-              name="Readings"
-              component={ReadingsScreen}
-              options={{
-                headerTitle: 'Sensor readings',
-                tabBarLabel: 'Readings',
-                tabBarAccessibilityLabel: 'Sensor readings tab',
-              }}
-            />
-            <Tab.Screen
-              name="Dashboard"
-              component={ChartsScreen}
-              options={{
-                headerTitle: () => <DashboardHeaderTitle />,
-                tabBarLabel: 'Dashboard',
-                tabBarAccessibilityLabel: 'Dashboard tab',
-              }}
-            />
-            {/* Reached from Account, so it carries no tab button either. */}
-            <Tab.Screen
-              name="RouteHistory"
-              component={RouteHistoryScreen}
-              options={{
-                headerTitle: 'App activity',
-                tabBarButton: () => null,
-                tabBarItemStyle: { display: 'none' },
-              }}
-            />
-            {/* Reached by tapping a sensor on Live. Hidden for the same reason
-                as App activity: it is about one sensor, so it is a place you
-                arrive at from something, never a destination in its own right.
-                The header title names the sensor the params carry. */}
-            <Tab.Screen
-              name="SensorDetail"
-              component={SensorDetailScreen}
-              options={({ route }) => ({
-                headerTitle: route.params?.sensorName || 'Sensor',
-                // Back to Live, where the card was tapped — a hidden tab has no
-                // button of its own to return by.
-                headerLeft: () => (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Back to live readings"
-                    onPress={goToLive}
-                    hitSlop={10}
-                    style={({ pressed }) => ({
-                      paddingLeft: 16,
-                      paddingRight: 8,
-                      paddingVertical: 8,
-                      opacity: pressed ? 0.6 : 1,
-                    })}
-                  >
-                    <Ionicons name="chevron-back" size={24} color={t.textPrimary} />
-                  </Pressable>
-                ),
-                tabBarButton: () => null,
-                tabBarItemStyle: { display: 'none' },
+            <Tab.Navigator
+              // Land on Home: the site's status at a glance, then the dashboards
+              // as a grid. Someone opening the app to check on something gets
+              // the answer without choosing a screen first.
+              initialRouteName="Home"
+              screenOptions={({ route }) => ({
+                /**
+               * The header is the page colour, not the card colour.
+               *
+               * Android draws the app under a transparent status bar, so the
+               * strip behind the clock is whatever the header paints. A header
+               * one shade lighter than the page produced two horizontal
+               * boundaries at the top of every screen — bar to header, header
+               * to content — which read as "lines from the phone bar". One
+               * colour from the top edge to the first card leaves nothing to
+               * see. (Where the OS forces an opaque bar — a hidden camera
+               * cutout, or the Expo Go client — the app cannot paint there at
+               * all; that band is the phone's, not the app's.)
+               */
+              headerStyle: { backgroundColor: t.background },
+                headerTitleStyle: {
+                  color: t.textPrimary,
+                  fontSize: 17,
+                  fontWeight: '700',
+                  fontFamily: font('700'),
+                },
+                headerShadowVisible: false,
+                // Only the data screens are scoped by a dashboard tab, so only
+                // they get the opener — a list icon on Account would open a
+                // sidebar that changes nothing on screen.
+                headerLeft: SIDEBAR_ROUTES.has(route.name) ? () => <SidebarToggle /> : undefined,
+                // The site-scoped screens carry the filter in the header,
+                // beside the sidebar button, rather than each repeating it in a
+                // filters card — and the alerts bell to its left, on every
+                // screen that has a header of its own to put it in.
+                headerRight: SITE_FILTER_ROUTES.has(route.name)
+                  ? () => <HeaderSiteControls />
+                  : route.name === 'Account'
+                    ? () => <HeaderAccountControls />
+                    : undefined,
+                tabBarActiveTintColor: t.accent,
+                tabBarInactiveTintColor: t.textMuted,
+                tabBarStyle: { backgroundColor: t.surface, borderTopColor: t.border },
+                /**
+                 * Icons alone, no captions.
+                 *
+                 * Five labels on a narrow phone left ~70dp each and the longest
+                 * ("Dashboard") only fitted with the font size pinned at 10pt —
+                 * small enough to read as noise under a glyph that already says
+                 * the same thing. The label is still set on every screen below:
+                 * it feeds the accessibility name, so a screen reader announces
+                 * "Readings" even though nothing is drawn.
+                 */
+                tabBarShowLabel: false,
+                tabBarAllowFontScaling: false,
+                // flex: 1 on every visible item divides the bar evenly, and the
+                // icon centres in its share now that nothing sits beneath it.
+                tabBarItemStyle: { flex: 1, paddingHorizontal: 2 },
+                tabBarIcon: ({ focused, color, size }) => {
+                  // The account tab shows who is signed in — their ERPNext avatar,
+                  // or their initials — rather than a generic person glyph.
+                  if (route.name === 'Account') {
+                    return (
+                      <View>
+                        <UserAvatar size={size ?? 24} focused={focused} color={color} />
+                        {/* A new APK is the one thing the app must volunteer:
+                            nothing else will tell a field phone it is out of
+                            date. A dot, not a count — there is only ever one
+                            newer version, and the number would mean nothing. */}
+                        {updateAvailable ? (
+                          <View
+                            style={{
+                              position: 'absolute',
+                              top: -1,
+                              right: -1,
+                              width: 10,
+                              height: 10,
+                              borderRadius: 5,
+                              backgroundColor: t.accent,
+                              // Reads as a badge rather than a smudge on top of
+                              // whichever avatar colour is underneath.
+                              borderWidth: 1.5,
+                              borderColor: t.surface,
+                            }}
+                          />
+                        ) : null}
+                      </View>
+                    );
+                  }
+                  if (route.name === 'Readings') {
+                    return <ReadingsTabIcon size={size ?? 24} color={color} />;
+                  }
+                  const [active, inactive] = ICONS[route.name] || ICONS.Live;
+                  return (
+                    <Ionicons name={focused ? active : inactive} size={size ?? 24} color={color} />
+                  );
+                },
               })}
-            />
-            <Tab.Screen
-              name="Account"
-              component={SettingsScreen}
-              options={{
-                headerTitle: 'Account',
-                tabBarLabel: 'Account',
-                tabBarAccessibilityLabel: 'Account tab',
-              }}
-            />
-          </Tab.Navigator>
-        </NavigationContainer>
+            >
+              {/*
+                `title` feeds BOTH the header and the tab label, so a descriptive
+                header title ("Sensor readings") ends up wrapped across two lines
+                in the tab bar. headerTitle and tabBarLabel are set separately so
+                each reads correctly in its own place.
+              */}
+              <Tab.Screen
+                name="Home"
+                component={HomeScreen}
+                // The mark instead of the word — the tab bar's house glyph
+                // already says "Home", so the title is free to be the app.
+                options={{
+                  headerTitle: () => <HomeHeaderTitle />,
+                  tabBarLabel: 'Home',
+                  tabBarAccessibilityLabel: 'Home tab',
+                }}
+              />
+              <Tab.Screen
+                name="Live"
+                component={DashboardScreen}
+                options={{
+                  headerTitle: 'Live readings',
+                  tabBarLabel: 'Live',
+                  tabBarAccessibilityLabel: 'Live readings tab',
+                }}
+              />
+              <Tab.Screen
+                name="Readings"
+                component={ReadingsScreen}
+                options={{
+                  headerTitle: 'Sensor readings',
+                  tabBarLabel: 'Readings',
+                  tabBarAccessibilityLabel: 'Sensor readings tab',
+                }}
+              />
+              <Tab.Screen
+                name="Dashboard"
+                component={ChartsScreen}
+                options={{
+                  headerTitle: () => <DashboardHeaderTitle />,
+                  tabBarLabel: 'Dashboard',
+                  tabBarAccessibilityLabel: 'Dashboard tab',
+                }}
+              />
+              {/* Reached from Account, so it carries no tab button either. */}
+              <Tab.Screen
+                name="RouteHistory"
+                component={RouteHistoryScreen}
+                options={{
+                  headerTitle: 'App activity',
+                  tabBarButton: () => null,
+                  tabBarItemStyle: { display: 'none' },
+                }}
+              />
+              {/* Reached by tapping a sensor on Live. Hidden for the same reason
+                  as App activity: it is about one sensor, so it is a place you
+                  arrive at from something, never a destination in its own right.
+                  The header title names the sensor the params carry. */}
+              <Tab.Screen
+                name="SensorDetail"
+                component={SensorDetailScreen}
+                options={({ route }) => ({
+                  headerTitle: route.params?.sensorName || 'Sensor',
+                  // Back to Live, where the card was tapped — a hidden tab has no
+                  // button of its own to return by.
+                  headerLeft: () => (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Back to live readings"
+                      onPress={goToLive}
+                      hitSlop={10}
+                      style={({ pressed }) => ({
+                        paddingLeft: 16,
+                        paddingRight: 8,
+                        paddingVertical: 8,
+                        opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <Ionicons name="chevron-back" size={24} color={t.textPrimary} />
+                    </Pressable>
+                  ),
+                  tabBarButton: () => null,
+                  tabBarItemStyle: { display: 'none' },
+                })}
+              />
+              {/* Reached from the header bell on every screen, or a tapped push.
+                  Hidden like the two above: a list of what happened is a place
+                  you go to look, then leave — the back chevron returns to
+                  whichever screen the bell was pressed on. */}
+              <Tab.Screen
+                name={NOTIFICATIONS_ROUTE}
+                component={NotificationsScreen}
+                options={{
+                  headerTitle: 'Notifications',
+                  headerLeft: () => (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Back"
+                      onPress={leaveNotifications}
+                      hitSlop={10}
+                      style={({ pressed }) => ({
+                        paddingLeft: 16,
+                        paddingRight: 8,
+                        paddingVertical: 8,
+                        opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <Ionicons name="chevron-back" size={24} color={t.textPrimary} />
+                    </Pressable>
+                  ),
+                  tabBarButton: () => null,
+                  tabBarItemStyle: { display: 'none' },
+                }}
+              />
+              {/* Reached from Home's quick links, a sensor's detail screen or the
+                  map's empty state. Hidden like the rest: setting coordinates is
+                  a task — stand at the sensor, scan, save — not a place, and the
+                  back chevron returns to wherever the task was started from.
+                  The header's site filter scopes its picker. */}
+              <Tab.Screen
+                name={SENSOR_LOCATION_ROUTE}
+                component={SensorLocationScreen}
+                options={{
+                  headerTitle: 'Set coordinates',
+                  headerLeft: () => (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Back"
+                      onPress={leaveSensorLocation}
+                      hitSlop={10}
+                      style={({ pressed }) => ({
+                        paddingLeft: 16,
+                        paddingRight: 8,
+                        paddingVertical: 8,
+                        opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <Ionicons name="chevron-back" size={24} color={t.textPrimary} />
+                    </Pressable>
+                  ),
+                  tabBarButton: () => null,
+                  tabBarItemStyle: { display: 'none' },
+                }}
+              />
+              {/* Every positioned sensor on a map. The refresh icon sits beside
+                  the site filter because the map is a WebView: a pull-to-refresh
+                  gesture would be the map's own pan. */}
+              <Tab.Screen
+                name={SENSOR_MAP_ROUTE}
+                component={SensorMapScreen}
+                options={{
+                  headerTitle: 'Sensor list',
+                  headerLeft: () => (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Back"
+                      onPress={leaveSensorMap}
+                      hitSlop={10}
+                      style={({ pressed }) => ({
+                        paddingLeft: 16,
+                        paddingRight: 8,
+                        paddingVertical: 8,
+                        opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <Ionicons name="chevron-back" size={24} color={t.textPrimary} />
+                    </Pressable>
+                  ),
+                  headerRight: () => (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'stretch' }}>
+                      <SensorMapAddLocationButton />
+                      <SensorMapRefreshButton />
+                      <HeaderSiteControls />
+                    </View>
+                  ),
+                  tabBarButton: () => null,
+                  tabBarItemStyle: { display: 'none' },
+                }}
+              />
+              <Tab.Screen
+                name="Account"
+                component={SettingsScreen}
+                options={{
+                  headerTitle: 'Account',
+                  tabBarLabel: 'Account',
+                  tabBarAccessibilityLabel: 'Account tab',
+                }}
+              />
+            </Tab.Navigator>
+          </NavigationContainer>
 
-        <FloatingSidebar />
+          <FloatingSidebar />
 
-        {/* Renders nothing. Inside DashboardProvider because a tapped alert
-            selects the site it happened at before opening Live. */}
-        <PushRegistrar />
+          {/* Renders nothing. Inside the providers so it exists exactly as long
+              as a session does; a tapped alert opens the Notifications list. */}
+          <PushRegistrar />
 
-        {/* Outside the navigator so it floats over every screen, and so the
-            screenshot it captures is of the screen rather than of itself. */}
-        <ReportButton />
+          {/* Outside the navigator so it floats over every screen, and so the
+              screenshot it captures is of the screen rather than of itself. */}
+          <ReportButton />
 
-        {/* Outside the navigator too: connectivity is the app's state, not one
-            screen's, and the screens themselves stay on their skeletons. */}
-        <OfflineToast />
-      </View>
+          {/* Outside the navigator too: connectivity is the app's state, not one
+              screen's, and the screens themselves stay on their skeletons. */}
+          <OfflineToast />
+        </View>
+      </NotificationsProvider>
     </DashboardProvider>
   );
 }
