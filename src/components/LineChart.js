@@ -196,10 +196,24 @@ export function LineChart({
    */
   const xLabelIndices = useMemo(() => {
     if (count <= 1) return [0];
-    const maxLabels = Math.max(2, Math.min(8, Math.floor(plotW / 64)));
 
     const marks = labels.map(absoluteMinutes);
     const intraday = count > 0 && marks.every((m) => m !== null);
+    /**
+     * The per-label pixel budget, and how many can fit before crowding.
+     *
+     * A date-only tick ("2026-09-10") is drawn in full and needs the wider
+     * 64px estimate this always used. An intraday tick is drawn as bare
+     * "HH:MM" (see the render loop below — the date is dropped from the AXIS
+     * text, not from the tooltip, which still shows the full instant on
+     * touch), so it earns a narrower budget and a higher ceiling: the same
+     * phone width that only fit 4 full-date labels comfortably fits 8-10
+     * short ones, which is the difference between an axis that looks like it
+     * has four data points and one that looks like the chart it actually is.
+     */
+    const maxLabels = intraday
+      ? Math.max(2, Math.min(10, Math.floor(plotW / 34)))
+      : Math.max(2, Math.min(8, Math.floor(plotW / 64)));
     if (intraday) {
       const onHalfHour = [];
       for (let i = 0; i < count; i += 1) {
@@ -227,6 +241,35 @@ export function LineChart({
     const step = (count - 1) / (maxLabels - 1);
     return Array.from({ length: maxLabels }, (_, k) => Math.round(k * step));
   }, [count, plotW, labels]);
+
+  /**
+   * What each shown tick actually prints — computed once per tick set, not
+   * per-label in isolation, because the one thing a bare "HH:MM" axis cannot
+   * say on its own is WHICH day: a 3-day chart's ticks wrap past midnight
+   * more than once, and "03:00" with nothing else is two different instants
+   * a day apart. So the date is added back in, but only on the tick where it
+   * actually changes from the one before it — the same convention a
+   * day-crossing agenda or a long chat thread uses, rather than repeating a
+   * date every tick already carries the previous tick's context for.
+   */
+  const tickTexts = useMemo(() => {
+    let lastDate = null;
+    return xLabelIndices.map((i) => {
+      const raw = String(labels[i] || '');
+      if (absoluteMinutes(raw) === null) return raw; // date-only bucket: unchanged
+      const date = raw.slice(0, 10);
+      const time = raw.slice(11, 16);
+      const changed = date !== lastDate;
+      lastDate = date;
+      // "10 Sep" rather than the full "2026-09-10": the year is not in
+      // question on a chart that never spans one, and the shorter form keeps
+      // the day-change tick from crowding its neighbours.
+      if (!changed) return time;
+      const [, mo, da] = date.split('-');
+      const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      return `${time} · ${da} ${MONTHS[Number(mo) - 1]}`;
+    });
+  }, [xLabelIndices, labels]);
 
   if (!allFinite.length) {
     return (
@@ -349,7 +392,7 @@ export function LineChart({
               />
             ))}
 
-            {xLabelIndices.map((i) => {
+            {xLabelIndices.map((i, k) => {
               const x = xAt(i);
               const y = height - PAD.bottom + 15;
               return (
@@ -365,7 +408,7 @@ export function LineChart({
                   textAnchor="end"
                   transform={`rotate(-30, ${x}, ${y})`}
                 >
-                  {labels[i]}
+                  {tickTexts[k]}
                 </SvgText>
               );
             })}
