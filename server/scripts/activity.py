@@ -71,7 +71,54 @@ if who:
 
 routes = {"rows": [], "total": 0}
 if "routes" in include:
-	clause = " AND ".join(route_where) if route_where else "1 = 1"
+	# This module's screens only. Route History is a site-wide table that
+	# Frappe's own desk writes every navigation into, so without this the
+	# Activity screen listed HR, Attendance and DocType browsing as though it
+	# were app usage — on a shared site the sensors rows were a minority of it.
+	#
+	# Mirrors upande_sensors.api.mobile._sensors_routes_only; three shapes:
+	#   1. no "/" — a phone screen name ("Home", "Live", "Sensor · <name>")
+	#   2. "sensors-dashboard…" — the Vue dashboard's own route prefix
+	#   3. a desk route whose second segment is something this module owns
+	#      (List/<DocType>/List, Workspaces/<name>, query-report/<Report> …),
+	#      read from the site rather than listed by hand. The module names are
+	#      in that list too: the workspace this app shipped under before the
+	#      rename was called after the module, and those rows are most of the
+	#      history on an established site.
+	modules = frappe.get_all("Module Def", filters={"app_name": "upande_sensors"}, pluck="name")
+	owned = []
+	if modules:
+		names = set(modules)
+		for owned_type in ("DocType", "Workspace", "Report", "Page"):
+			names.update(frappe.get_all(owned_type, filters={"module": ["in", modules]}, pluck="name"))
+		owned = sorted([n for n in names if n])
+
+	# Not the account that maintains the app: it deploys, tests and debugs it,
+	# so its visits are someone checking a screen works rather than using it.
+	# The phone refuses to record them and log_routes refuses to write them —
+	# but Frappe's own desk writes its navigation rows regardless, and without
+	# this the audit is largely the person maintaining it.
+	params["untracked_user"] = "Administrator"
+	route_where.append("user <> %(untracked_user)s")
+
+	params["any_slash"] = "%/%"
+	params["dashboard_prefix"] = "sensors-dashboard%"
+	scope = "(route NOT LIKE %(any_slash)s OR route LIKE %(dashboard_prefix)s"
+	if owned:
+		keys = []
+		for idx in range(len(owned)):
+			key = "owned" + str(idx)
+			params[key] = owned[idx]
+			keys.append("%(" + key + ")s")
+		scope = (
+			scope
+			+ " OR SUBSTRING_INDEX(SUBSTRING_INDEX(route, '/', 2), '/', -1) IN ("
+			+ ", ".join(keys)
+			+ ")"
+		)
+	route_where.append(scope + ")")
+
+	clause = " AND ".join(route_where)
 	rows = frappe.db.sql(
 		"SELECT name, user, route, creation FROM `tabRoute History` WHERE "
 		+ clause

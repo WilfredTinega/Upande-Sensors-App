@@ -1,5 +1,5 @@
 import React from 'react';
-import { Image, Pressable, Text, View } from 'react-native';
+import { Pressable, Text, View, useWindowDimensions } from 'react-native';
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -7,34 +7,10 @@ import { SelectField } from './ui';
 import { useDashboard } from '../context/DashboardContext';
 import { useNotifications } from '../context/NotificationsContext';
 import { useThemePreference } from '../context/ThemeContext';
+import { useUpdate } from '../context/UpdateContext';
 import { goToNotifications } from '../navigation/ref';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { font } from '../theme';
-
-/**
- * Header title for Home: the Upande mark, and nothing else.
- *
- * The word "Home" was the only thing on the screen naming the app, and it named
- * the wrong thing — the tab bar's highlighted house glyph already says where
- * you are, so the title was repeating it. The mark is the app identifying
- * itself, once, on its landing screen, where the other screens carry a title
- * that has actual work to do. Same asset and size as the sidebar's launcher, so
- * the two read as one mark in two places rather than two marks.
- *
- * The accessibility label stays "Home": a screen reader needs the destination,
- * not the brand.
- */
-export function HomeHeaderTitle() {
-  return (
-    <Image
-      source={require('../../assets/upande-logo.png')}
-      style={{ width: 28, height: 28 }}
-      resizeMode="contain"
-      accessibilityRole="image"
-      accessibilityLabel="Home"
-    />
-  );
-}
 
 /**
  * Header title for the dashboard screen: the sidebar's active selection.
@@ -44,21 +20,58 @@ export function HomeHeaderTitle() {
  * looking at" without opening the sidebar to check.
  */
 export function DashboardHeaderTitle() {
-  const t = useTheme();
   const { activeTab, configLoading } = useDashboard();
+  // The second line names the dashboard being shown rather than the screen,
+  // which is what the sidebar just chose and the only thing that changes here.
+  return <HeaderSiteTitle title={activeTab?.label || (configLoading ? 'Loading…' : 'Sensor dashboard')} />;
+}
 
+/**
+ * The header's two lines: the site above, the screen below.
+ *
+ * They used to share one line — screen name left, site right — and competed
+ * for it, because React Navigation budgets a flat 52 points for whatever sits
+ * on the right and the site name is several times that. Stacked and centred,
+ * neither has to be cut short, and the order says which matters: everything on
+ * the screen is scoped by the site, so the site is the heading and the screen
+ * is what you are looking at within it.
+ *
+ * The site line is the filter itself — tapping it still opens the picker.
+ */
+export function HeaderSiteTitle({ title }) {
+  const t = useTheme();
   return (
-    <Text
-      numberOfLines={1}
-      style={[type.heading, { color: t.textPrimary, fontSize: 17, fontWeight: '700', fontFamily: font('700') }]}
-    >
-      {activeTab?.label || (configLoading ? 'Loading…' : 'Sensor dashboard')}
-    </Text>
+    // Stretched, not hugging its contents: the block spans the header so the
+    // two lines can align differently — the site centred in the bar, the screen
+    // name against its left edge rather than under the middle of the site name.
+    <View style={{ alignSelf: 'stretch', justifyContent: 'center' }}>
+      <HeaderSiteFilter />
+      {title ? (
+        <Text
+          numberOfLines={1}
+          style={[
+            type.caption,
+            {
+              // 14, not the caption's 11: this names the screen you are on, and
+              // at caption size it read as a footnote to the site rather than
+              // as the other half of the title.
+              fontSize: 14,
+              textAlign: 'left',
+              color: t.textSecondary,
+              marginTop: 1,
+              fontFamily: font('700'),
+            },
+          ]}
+        >
+          {title}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 
 /**
- * Site filter, top right.
+ * The site line of the title, and the filter itself.
  *
  * Bare variant — a bordered field in a header would read as a second toolbar.
  *
@@ -71,19 +84,23 @@ export function DashboardHeaderTitle() {
  * something the app should hand you by default.
  */
 export function HeaderSiteFilter() {
-  const t = useTheme();
-  const { sites, site, setSite, sensorCounts, filtersLocked } = useDashboard();
+  const { width } = useWindowDimensions();
+  const { sites, site, setSite, filtersLocked } = useDashboard();
 
   return (
     <View
       style={{
-        alignItems: 'flex-end',
+        alignItems: 'center',
         justifyContent: 'center',
-        alignSelf: 'stretch',
-        // Sized for the longest site name in use ("Kuehne Nagel KN1 & KN2") at
-        // the filter's 14px weight-600 face; below this it ellipsises.
-        maxWidth: 220,
-        paddingRight: spacing.lg,
+        alignSelf: 'center',
+        /**
+         * The centre of the bar, between the sidebar button and the bell, is
+         * what a long site name has to live in — "Kuehne Nagel KN1 & KN2" at
+         * 16/700 is most of a narrow phone. Past this it ellipsises rather
+         * than wrapping, which would push the screen name below it off.
+         */
+        flexShrink: 1,
+        maxWidth: Math.min(260, Math.round(width * 0.6)),
       }}
     >
       <SelectField
@@ -97,34 +114,6 @@ export function HeaderSiteFilter() {
         placeholder={filtersLocked ? 'Loading…' : 'Select site'}
         disabled={filtersLocked}
       />
-
-      {/* Live / stale / total, directly under the filter they are scoped by.
-          Each carries its word as well as its colour — a bare coloured number
-          would rest identity on hue alone. */}
-      {sensorCounts ? (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 1 }}>
-          <Text style={[type.caption, { color: t.status.good, fontSize: 10, fontFamily: font('600') }]}>
-            {sensorCounts.live} live
-          </Text>
-          <Text style={[type.caption, { color: t.textMuted, fontSize: 10 }]}>·</Text>
-          <Text
-            style={[
-              type.caption,
-              {
-                color: sensorCounts.stale ? t.status.critical : t.textMuted,
-                fontSize: 10,
-                fontFamily: font('600'),
-              },
-            ]}
-          >
-            {sensorCounts.stale} stale
-          </Text>
-          <Text style={[type.caption, { color: t.textMuted, fontSize: 10 }]}>·</Text>
-          <Text style={[type.caption, { color: t.textMuted, fontSize: 10 }]}>
-            {sensorCounts.total} total
-          </Text>
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -187,7 +176,8 @@ export function HeaderThemeSwitch() {
 }
 
 /**
- * The bell, top right of every screen.
+ * The bell, at the right edge of the header, on every screen that has header
+ * controls of its own.
  *
  * Alerts used to be a card inline on Home — five rows for the selected site,
  * which put a list of problems on the landing page whether or not there were
@@ -196,22 +186,34 @@ export function HeaderThemeSwitch() {
  * something new, and the list one tap away from wherever they are.
  *
  * The badge is unread, not total — alerts raised since the list was last
- * opened — capped at "9+" because past nine the digit is noise and the size
- * of the badge would start to vary. Hidden altogether, glyph and all, on a
- * server without the alerts endpoints: a bell that opens "needs a newer
- * server" every time is a nag, not a feature.
+ * opened, plus a waiting app update — capped at "9+" because past nine the
+ * digit is noise and the size of the badge would start to vary. Hidden
+ * altogether, glyph and all, when there is neither: on a server without the
+ * alerts endpoints and with nothing to install, a bell that opens "needs a
+ * newer server" every time is a nag, not a feature.
  */
 export function HeaderBell({ style }) {
   const t = useTheme();
   const { unread, supported } = useNotifications();
-  if (!supported) return null;
+  /**
+   * The badge counts what the list holds, and a waiting update is a row in it.
+   *
+   * It used to count server alerts alone, so a phone with an update and no
+   * breaches opened the list to an item the bell had said nothing about. The
+   * update is also why the bell can outlive the alerts endpoints: on a server
+   * too old for them there is still that one row to reach, and a hidden bell
+   * would make it unreachable.
+   */
+  const { available: updateAvailable } = useUpdate();
+  const count = (supported ? unread : 0) + (updateAvailable ? 1 : 0);
+  if (!supported && !updateAvailable) return null;
 
-  const badge = unread > 9 ? '9+' : String(unread);
+  const badge = count > 9 ? '9+' : String(count);
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={unread ? `Notifications, ${unread} unread` : 'Notifications'}
+      accessibilityLabel={count ? `Notifications, ${count} unread` : 'Notifications'}
       onPress={goToNotifications}
       hitSlop={6}
       style={({ pressed }) => [
@@ -221,7 +223,7 @@ export function HeaderBell({ style }) {
     >
       <View>
         <Ionicons name="notifications-outline" size={22} color={t.textPrimary} />
-        {unread ? (
+        {count ? (
           <View
             style={{
               position: 'absolute',
@@ -260,19 +262,28 @@ export function HeaderBell({ style }) {
 }
 
 /**
- * The site-scoped screens' `headerRight`: bell, then the site filter.
+ * The site-scoped screens' `headerRight`: the site filter, then the bell.
  *
- * One row because `headerRight` takes a single element, and the bell goes on
- * the LEFT of the filter so the filter keeps the header's right edge — its
- * live / stale line is right-aligned under it and would otherwise sit under
- * the bell. The filter carries the header's right padding itself; the bell
- * only needs a small gap from it.
+ * One row because `headerRight` takes a single element. The bell sits on the
+ * RIGHT, on the header's own edge, which is where a phone's notification
+ * affordance is looked for; the site name reads as the continuation of the
+ * title beside it rather than as something after the bell.
+ *
+ * The header's right padding is on this row, not on the bell: the bell renders
+ * nothing on a server without the alerts endpoints, and padding carried by it
+ * would go with it, leaving the site name flush against the screen edge.
  */
 export function HeaderSiteControls() {
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'stretch' }}>
-      <HeaderBell style={{ marginRight: 2 }} />
-      <HeaderSiteFilter />
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'stretch',
+        paddingRight: spacing.lg,
+      }}
+    >
+      <HeaderBell />
     </View>
   );
 }

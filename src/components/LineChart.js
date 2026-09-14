@@ -274,7 +274,7 @@ export function LineChart({
   if (!allFinite.length) {
     return (
       <View style={{ height, alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={[type.body, { color: t.textMuted }]}>No readings in this range.</Text>
+        <Text style={[type.body, { color: t.textMuted }]}>No data</Text>
       </View>
     );
   }

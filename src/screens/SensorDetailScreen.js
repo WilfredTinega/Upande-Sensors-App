@@ -113,6 +113,17 @@ function LocationRow({ site, sensorName, canSet }) {
   const placed = hasCoordinates(row);
   if (!placed && !canSet) return null;
   const accuracy = formatMetres(row.location_accuracy_m);
+  /**
+   * The place, when the Sensor row has been given one — "Naivasha Road,
+   * Naivasha" rather than "-1.17106, 36.9763…", which is what a truncated pair
+   * of coordinates reads as at this width and tells nobody where the sensor is.
+   *
+   * `physical_location` is filled by whatever last resolved it: the coordinate
+   * save from the phone, the Desk form, or the migrate backfill. A server too
+   * old to send the field, or a fix no geocoder could name, falls back to the
+   * coordinates — which is why they are still the second half of this.
+   */
+  const place = String(row.physical_location || '').trim();
 
   return (
     <Card style={{ marginBottom: spacing.sm }}>
@@ -120,11 +131,27 @@ function LocationRow({ site, sensorName, canSet }) {
         <Ionicons name={placed ? 'location' : 'location-outline'} size={18} color={placed ? t.accent : t.textMuted} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[type.caption, { color: t.textSecondary }]}>Location</Text>
-          <Text numberOfLines={1} style={[type.body, { color: t.textPrimary, fontVariant: ['tabular-nums'] }]}>
-            {placed
-              ? `${formatCoordinates(row.latitude, row.longitude)}${accuracy ? ` · ${accuracy}` : ''}`
-              : 'No coordinates yet'}
+          <Text
+            numberOfLines={1}
+            style={[
+              type.body,
+              { color: t.textPrimary },
+              // Tabular figures line coordinates up; they do nothing for a name.
+              place && placed ? null : { fontVariant: ['tabular-nums'] },
+            ]}
+          >
+            {!placed
+              ? 'No coordinates yet'
+              : place || `${formatCoordinates(row.latitude, row.longitude)}${accuracy ? ` · ${accuracy}` : ''}`}
           </Text>
+          {place && placed ? (
+            <Text
+              numberOfLines={1}
+              style={[type.caption, { color: t.textMuted, fontVariant: ['tabular-nums'] }]}
+            >
+              {`${formatCoordinates(row.latitude, row.longitude)}${accuracy ? ` · ${accuracy}` : ''}`}
+            </Text>
+          ) : null}
         </View>
         {placed ? (
           <Button compact tone="ghost" label="View on map" onPress={() => goToSensorMap({ focus: sensorName })} />

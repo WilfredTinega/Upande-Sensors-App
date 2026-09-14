@@ -242,6 +242,10 @@ export function SelectField({
   // 'bare' drops the box and renders as text + caret, for use in a navigation
   // header where a bordered field would sit too heavily.
   variant = 'boxed',
+  // Overrides for a bare trigger that is not in a header — Home's greeting
+  // card renders the site at heading size, left-aligned.
+  style,
+  textStyle,
   /**
    * Server-side search. When given, typing queries the source rather than
    * filtering the options already fetched — necessary for lists longer than one
@@ -284,14 +288,15 @@ export function SelectField({
 
   return (
     <View
-      style={
+      style={[
         // The bare variant sits inside a navigation header: it must size to its
         // content and centre on the cross axis, not stretch or carry the
         // form-field bottom margin.
         variant === 'bare'
           ? { alignSelf: 'center', flexShrink: 1 }
-          : { flex: compact ? 1 : undefined, marginBottom: compact ? 0 : spacing.lg }
-      }
+          : { flex: compact ? 1 : undefined, marginBottom: compact ? 0 : spacing.lg },
+        style,
+      ]}
     >
       {label ? (
         <Text style={[type.label, { color: t.textSecondary, marginBottom: spacing.xs }]}>
@@ -316,7 +321,9 @@ export function SelectField({
           opacity: disabled || !normalised.length ? 0.5 : pressed ? 0.6 : 1,
           flexDirection: 'row',
           alignItems: 'center',
-          justifyContent: variant === 'bare' ? 'flex-end' : 'space-between',
+          // The bare variant is the header's centred site name, not a field
+          // pinned to an edge.
+          justifyContent: variant === 'bare' ? 'center' : 'space-between',
           gap: 4,
         })}
       >
@@ -326,17 +333,26 @@ export function SelectField({
             type.body,
             {
               color: variant === 'bare' ? t.accent : selected ? t.textPrimary : t.textMuted,
-              fontWeight: variant === 'bare' ? '600' : '400',
-              fontFamily: variant === 'bare' ? font('600') : font('400'),
+              fontWeight: variant === 'bare' ? '700' : '400',
+              fontFamily: variant === 'bare' ? font('700') : font('400'),
+              // The bare variant is the header's site filter, and the site is
+              // what every screen under it is scoped by — the one fact the
+              // header is there to state. Sized and weighted to say so, close
+              // to the header title beside it rather than a footnote to it.
+              fontSize: variant === 'bare' ? 16 : undefined,
               flexShrink: 1,
               flex: variant === 'bare' ? undefined : 1,
             },
+            textStyle,
           ]}
         >
           {selected?.label || (allowClear && !value ? clearLabel : placeholder)}
         </Text>
-        {/* Scaled with the label so the caret does not shrink away beside it. */}
-        <Text style={{ color: variant === 'bare' ? t.accent : t.textMuted, fontSize: variant === 'bare' ? 12 : 10 }}>▼</Text>
+        {/* No caret on the bare variant: it sits in a header where the name is
+            the point, and tapping it opens the list whether or not a glyph
+            says so. The boxed variant keeps one — a bordered field that did
+            nothing on tap would read as a disabled input. */}
+        {variant === 'bare' ? null : <Text style={{ color: t.textMuted, fontSize: 10 }}>▼</Text>}
       </Pressable>
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
@@ -468,7 +484,7 @@ export function SelectField({
  * every option carries its own border and surface, so the whole row reads as
  * buttons at a glance.
  */
-export function ChoiceButtons({ options, value, onChange, disabled, style }) {
+export function ChoiceButtons({ options, value, onChange, disabled, style, hug }) {
   const t = useTheme();
   return (
     <View style={[{ flexDirection: 'row', gap: 5, opacity: disabled ? 0.5 : 1 }, style]}>
@@ -483,10 +499,13 @@ export function ChoiceButtons({ options, value, onChange, disabled, style }) {
             disabled={disabled}
             onPress={() => onChange?.(item.value)}
             style={({ pressed }) => ({
-              // Equal shares of the row, and never wider than the text needs.
-              flex: 1,
+              // Equal shares of the row, and never wider than the text needs —
+              // unless `hug`, for a row that scrolls sideways instead of
+              // dividing a fixed width, where a share of infinity means nothing
+              // and each choice has to be as wide as its own label.
+              flex: hug ? undefined : 1,
               paddingVertical: 8,
-              paddingHorizontal: 4,
+              paddingHorizontal: hug ? 12 : 4,
               borderRadius: radius.md,
               borderWidth: 1,
               borderColor: active ? t.accent : t.borderStrong,
@@ -499,8 +518,9 @@ export function ChoiceButtons({ options, value, onChange, disabled, style }) {
             <Text
               numberOfLines={1}
               // Shrinks rather than truncating: a range label ending up as
-              // "60 day…" is the thing this replaced.
-              adjustsFontSizeToFit
+              // "60 day…" is the thing this replaced. A hugging row is already
+              // as wide as its labels, so there is nothing to shrink into.
+              adjustsFontSizeToFit={!hug}
               minimumFontScale={0.85}
               style={[
                 type.caption,
@@ -698,6 +718,12 @@ export function EmptyState({ title, message, action }) {
 export function ErrorView({ error, onRetry }) {
   const t = useTheme();
   const message = error?.message || 'Something went wrong.';
+  // A mid-deploy bench restart is not a broken screen — the red "Couldn't
+  // load" box reads as one right when a release is going out, on every
+  // screen that happens to be open. Amber and "Deploying" say what is
+  // actually happening instead: try again shortly, not something is wrong.
+  const deploying = Boolean(error?.isDeploying);
+  const tone = deploying ? t.status.warning : t.status.critical;
   return (
     <View
       style={{
@@ -705,14 +731,14 @@ export function ErrorView({ error, onRetry }) {
         padding: spacing.lg,
         borderRadius: radius.md,
         borderWidth: StyleSheet.hairlineWidth,
-        borderColor: t.status.critical,
+        borderColor: tone,
         backgroundColor: t.surface,
         gap: spacing.md,
       }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-        <Text style={{ color: t.status.critical, fontSize: 12 }}>■</Text>
-        <Text style={[type.heading, { color: t.textPrimary }]}>Couldn’t load</Text>
+        <Text style={{ color: tone, fontSize: 12 }}>■</Text>
+        <Text style={[type.heading, { color: t.textPrimary }]}>{deploying ? 'Deploying' : 'Couldn’t load'}</Text>
       </View>
       <Text style={[type.body, { color: t.textSecondary, lineHeight: 20 }]}>{message}</Text>
       {onRetry ? <Button label="Try again" tone="ghost" onPress={onRetry} /> : null}

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -160,7 +160,7 @@ const EMPTY_LIVE = {};
 
 export function DashboardScreen() {
   const t = useTheme();
-  const { site, sitesLoading, sitesError, unitForType, setSensorCounts, sitePending } =
+  const { site, sitesLoading, sitesError, unitForType, sitePending } =
     useDashboard();
 
   /**
@@ -264,18 +264,6 @@ export function DashboardScreen() {
   // Either half failing leaves the screen unusable, and the sensor list failing
   // is the one that explains the most, so it is reported first.
   const liveError = sensorList.error || values.error;
-
-  // Published for the header, which is rendered by the navigator and so cannot
-  // reach this screen's state directly. Cleared on leaving, or the counts would
-  // linger over Readings and Dashboard.
-  useEffect(() => {
-    setSensorCounts(showSkeleton ? null : counts);
-  }, [counts, showSkeleton, setSensorCounts]);
-
-  // Clearing belongs to unmount alone. As part of the effect above it fired on
-  // every change, writing null and then the value — two context updates, and
-  // a visible flicker in the header.
-  useEffect(() => () => setSensorCounts(null), [setSensorCounts]);
 
   const refresh = useCallback(() => {
     if (!site) return Promise.resolve();

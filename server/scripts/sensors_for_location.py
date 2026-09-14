@@ -12,14 +12,15 @@
 #
 #   {rows: [{name, sensor_name, sensor_site, sensor_type, monitoring,
 #            latitude, longitude, location_accuracy_m, location_samples,
-#            location_updated_on, location_updated_by, has_location}],
+#            location_updated_on, location_updated_by, physical_location,
+#            has_location}],
 #    total}
 #
 # `has_location` is false for 0,0 as well as for NULL: 0,0 is the Gulf of
 # Guinea, and it is what an untouched Float pair reads as, so it is treated as
 # "never set" everywhere rather than drawn as a sensor at sea.
 #
-# The five location_* columns and the Sensor Location History doctype are NEW
+# The location_* columns and the Sensor Location History doctype are NEW
 # in upande_sensors; a site whose app predates them lacks them. Every read is
 # guarded by `has_field`, so on that site the row carries nulls for them rather
 # than the request dying with a 500 over a column that is not there.
@@ -52,6 +53,12 @@ LOCATION_FIELDS = [
 	"location_updated_on",
 	"location_updated_by",
 	"location_source",
+	# The reverse-geocoded place name. Read here so the app can show it; this
+	# script cannot WRITE it the way the app method does (naming a place needs
+	# upande_sensors.api.places, which the Server Script sandbox cannot import),
+	# so on a site running the scripts it stays whatever the Desk form or the
+	# migrate backfill last resolved.
+	"physical_location",
 ]
 HISTORY_DOCTYPE = "Sensor Location History"
 
@@ -159,6 +166,9 @@ def location_row(row):
 		"location_updated_by": (row.get("location_updated_by") or None)
 		if SENSOR_META.has_field("location_updated_by")
 		else None,
+		"physical_location": (row.get("physical_location") or None)
+		if SENSOR_META.has_field("physical_location")
+		else None,
 		"has_location": ok,
 	}
 
@@ -185,6 +195,29 @@ def sensor_scope_filters(site, allowed_sites):
 	return filters
 
 
+# Sensor Types this account is scoped to, lowercased; empty means unscoped.
+# Only a non-empty grant restricts — the same convention as the Sensor grants
+# above, and the same one `upande_sensors.api.permitted_types` follows.
+ALLOWED_TYPES = []
+if not UNRESTRICTED:
+	for granted_type in scoped("Sensor Type"):
+		ALLOWED_TYPES.append(frappe.utils.cstr(granted_type).strip().lower())
+
+
+def type_allowed(row):
+	"""May this account see the sensor's registered type?
+
+	An account scoped to Temperature is shown Temperature everywhere in the
+	app — every chart, list and map — so the coordinates picker and the map
+	must not be the one place a Pressure sensor still appears. A sensor with
+	no type at all is nobody's to hide and always passes.
+	"""
+	if not ALLOWED_TYPES:
+		return True
+	label = frappe.utils.cstr(row.get("sensor_type") or "").strip().lower()
+	return not label or label in ALLOWED_TYPES
+
+
 # ── end of the shared location block ─────────────────────────────────────────
 
 
@@ -203,7 +236,10 @@ if search:
 	# string collides with the driver's own placeholders.
 	or_filters = [
 		["sensor_name", "like", "%" + search + "%"],
-		["name", "=", search],
+		# A partial DevEUI, not the whole one: the app method matches the
+		# docname with LIKE too, and an installer types the last few characters
+		# off the sticker rather than all sixteen.
+		["name", "like", "%" + search + "%"],
 	]
 
 found = frappe.get_all(
@@ -211,13 +247,15 @@ found = frappe.get_all(
 	filters=filters,
 	or_filters=or_filters,
 	fields=sensor_fields(),
-	order_by="sensor_name asc",
+	order_by="sensor_name asc, name asc",
 	limit_page_length=0,
 )
 
 rows = []
 for row in found:
 	if not row.get("sensor_name"):
+		continue
+	if not type_allowed(row):
 		continue
 	rows.append(location_row(row))
 

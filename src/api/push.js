@@ -62,11 +62,28 @@ const IS_DEV = typeof __DEV__ !== 'undefined' && __DEV__;
  * `appOwnership === 'expo'` is the older one, kept so a stale Constants shape
  * still answers correctly.
  */
-const IS_EXPO_GO =
+export const IS_EXPO_GO =
   Constants.executionEnvironment === 'storeClient' || Constants.appOwnership === 'expo';
 
-/** Must match the channel the server names in each push, or Android drops it. */
-const CHANNEL_ID = 'alerts';
+/**
+ * Must match the channel the server names in each push, or Android drops it —
+ * `alerts.py` sends this string as `channelId` (Expo) and `channel_id` (FCM),
+ * and the two have to be changed together.
+ *
+ * Versioned because a channel's sound is fixed when the channel is CREATED and
+ * cannot be edited afterwards: adding the sound to "alerts" would have changed
+ * nothing on any phone that had already installed the app. A new id is the only
+ * way to reach them, so the suffix moves whenever the channel's own settings do.
+ */
+const CHANNEL_ID = 'alerts-v2';
+
+/**
+ * Frappe's success sound, bundled by the `expo-notifications` plugin (see the
+ * `sounds` array in app.json) which copies it into `res/raw` at build time.
+ * Named by filename, and only resolvable in a real build — there is no way to
+ * ship a custom sound through Expo Go.
+ */
+const CHANNEL_SOUND = 'success.mp3';
 
 /** The one push type this app knows how to act on. */
 export const PUSH_TYPE_LIMIT_ALERT = 'limit_alert';
@@ -248,6 +265,7 @@ export async function registerForPushNotifications({ appVersion } = {}) {
         importance: Notifications.AndroidImportance.HIGH,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#2a78d6',
+        sound: CHANNEL_SOUND,
       });
     }
 
@@ -361,13 +379,13 @@ export function installForegroundHandler() {
  * React to a tapped notification — the one that is open now, or the one that
  * launched the app.
  *
- * `onAlert({ site, sensorName, measure, alert })` is called for a limit alert;
- * anything else is ignored. The caller decides where to go — `PushRegistrar`
- * opens the Notifications list, where the tapped alert is the top row. The launch response and the live listener can both
- * report the same tap, so responses are de-duplicated by request identifier.
- * Returns the unsubscribe — a no-op function where push is unsupported.
+ * `onTap()` is called for a limit alert; anything else is ignored. It takes no
+ * payload because the list the caller opens is not scoped to one alert — the
+ * tapped one is simply its top row. The launch response and the live listener
+ * can both report the same tap, so responses are de-duplicated by request
+ * identifier. Returns the unsubscribe — a no-op where push is unsupported.
  */
-export function watchNotificationTaps(onAlert) {
+export function watchNotificationTaps(onTap) {
   const Notifications = notifications();
   if (!Notifications) return () => {};
 
@@ -381,12 +399,7 @@ export function watchNotificationTaps(onAlert) {
 
     const data = request?.content?.data;
     if (!data || data.type !== PUSH_TYPE_LIMIT_ALERT) return;
-    onAlert({
-      site: data.site || null,
-      sensorName: data.sensor_name || null,
-      measure: data.measure || null,
-      alert: data.alert || null,
-    });
+    onTap();
   };
 
   let sub = null;
@@ -417,8 +430,9 @@ export function watchNotificationTaps(onAlert) {
  * but a poor answer to a notification that just made the phone buzz: the bell
  * on screen would still read the old number for up to a minute. This fires as
  * the push lands, and `NotificationsContext` re-counts on it. Only limit alerts
- * are reported; the rest of the payload is nobody's business here. Returns the
- * unsubscribe — a no-op where push is unsupported, same rule as the rest.
+ * are reported, and only that they happened: the count is re-read from the
+ * server, so nothing in the payload is worth carrying. Returns the unsubscribe
+ * — a no-op where push is unsupported, same rule as the rest.
  */
 export function watchNotificationsReceived(onReceived) {
   const Notifications = notifications();
@@ -429,12 +443,7 @@ export function watchNotificationsReceived(onReceived) {
     sub = Notifications.addNotificationReceivedListener((notification) => {
       const data = notification?.request?.content?.data;
       if (!data || data.type !== PUSH_TYPE_LIMIT_ALERT) return;
-      onReceived({
-        site: data.site || null,
-        sensorName: data.sensor_name || null,
-        measure: data.measure || null,
-        alert: data.alert || null,
-      });
+      onReceived();
     });
   } catch (err) {
     logOnce('received', err);

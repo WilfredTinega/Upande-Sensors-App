@@ -13,13 +13,6 @@ import { goToNotifications } from '../navigation/ref';
 /**
  * Wires push notifications to the signed-in session. Renders nothing.
  *
- * A component rather than an effect in `SignedInApp` so that it lives INSIDE
- * the providers that tree renders — `SignedInApp` itself cannot read from them,
- * and the tap handler once needed `setSite` from one. It no longer does (a tap
- * opens the Notifications list, and the row there selects the site), but the
- * placement still says the right thing: this exists exactly as long as the
- * signed-in tree does.
- *
  * Mounting is the trigger: this tree exists only while a session does, so a
  * fresh sign-in and a restored one on cold start both register the same way,
  * and unmounting (sign-out) is what `AuthContext.signOut` pairs with the
@@ -57,11 +50,9 @@ export function PushRegistrar() {
 
   useEffect(() => {
     installForegroundHandler();
-    // A tapped push opens the list, not Live. It used to select the alert's
-    // site and jump to the readings, which answered the one alert and lost
-    // the rest: three breaches overnight are three banners, and the person
-    // tapping the third wants to see all three. The tapped alert is the top
-    // row; tapping IT does what the push tap used to.
+    // A tapped push opens the list, not Live: three breaches overnight are
+    // three banners, and the person tapping the third wants to see all three.
+    // The tapped alert is the top row, and tapping THAT opens its readings.
     return watchNotificationTaps(() => {
       goToNotifications();
     });

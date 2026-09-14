@@ -8,8 +8,9 @@ import { SkeletonList } from '../components/Skeleton';
 import { getAlerts } from '../api/endpoints';
 import { useDashboard } from '../context/DashboardContext';
 import { useNotifications } from '../context/NotificationsContext';
-import { goToLive } from '../navigation/ref';
-import { useTheme, spacing, radius, type } from '../hooks/useTheme';
+import { useUpdate } from '../context/UpdateContext';
+import { goToAccount, goToLive } from '../navigation/ref';
+import { useTheme, spacing, type } from '../hooks/useTheme';
 import { font } from '../theme';
 import { directionChip, groupAlertsByDay, isUnreadAlert } from '../utils/alerts';
 import { relativeTime } from '../utils/dates';
@@ -98,6 +99,7 @@ export function NotificationsScreen() {
   const t = useTheme();
   const { setSite } = useDashboard();
   const { markOpened } = useNotifications();
+  const { available: updateAvailable, update } = useUpdate();
 
   /**
    * Hand-rolled paging rather than `useQuery`: that hook holds one payload per
@@ -202,6 +204,38 @@ export function NotificationsScreen() {
         />
       }
     >
+      {/* A new build is the one thing here that does not come from the server,
+          so it is drawn outside every branch below: it belongs in the list even
+          while the alerts are still loading, have failed, or are unsupported —
+          those are all reasons the rest of the screen says nothing, and none of
+          them make the update less true. Tapping it opens Account, where the
+          button that installs it lives. */}
+      {updateAvailable ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`App update available${update?.version ? `, version ${update.version}` : ''}`}
+          onPress={goToAccount}
+          style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1, marginBottom: spacing.md })}
+        >
+          <Card style={{ borderColor: t.accent }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+              <Ionicons name="arrow-down-circle-outline" size={22} color={t.accent} />
+              <View style={{ flex: 1 }}>
+                <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>
+                  App update available
+                </Text>
+                {update?.version ? (
+                  <Text numberOfLines={1} style={[type.caption, { color: t.textSecondary, marginTop: 2 }]}>
+                    {`Version ${update.version}`}
+                  </Text>
+                ) : null}
+              </View>
+              <Ionicons name="chevron-forward" size={17} color={t.textMuted} />
+            </View>
+          </Card>
+        </Pressable>
+      ) : null}
+
       {loading && !rows ? (
         <SkeletonList count={5} />
       ) : unsupported ? (
@@ -215,29 +249,7 @@ export function NotificationsScreen() {
         </Card>
       ) : error && !list.length ? (
         <ErrorView error={error} onRetry={() => load('load')} />
-      ) : !list.length ? (
-        <Card>
-          <View style={{ alignItems: 'center', paddingVertical: spacing.md }}>
-            <View
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: radius.pill,
-                backgroundColor: t.accentSoft,
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginBottom: spacing.sm,
-              }}
-            >
-              <Ionicons name="checkmark-circle-outline" size={24} color={t.status.good} />
-            </View>
-            <EmptyState
-              title="All clear"
-              message={`No limit breaches in the last ${SINCE_DAYS} days.`}
-            />
-          </View>
-        </Card>
-      ) : (
+      ) : !list.length ? null : (
         <>
           {groups.map((group) => (
             <View key={group.key} style={{ marginBottom: spacing.lg }}>

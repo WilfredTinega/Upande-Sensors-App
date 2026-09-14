@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Device from 'expo-device';
 import * as Location from 'expo-location';
 import Svg, { Circle } from 'react-native-svg';
 
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { Button, Card, EmptyState, ErrorView, SectionTitle, SelectField, StatusChip } from '../components/ui';
+import { Button, Card, EmptyState, ErrorView, SectionTitle, SelectField } from '../components/ui';
 import { Skeleton } from '../components/Skeleton';
 import { TTL_REFERENCE, TTL_SERIES, cacheKey, invalidate } from '../api/cache';
 import { getSensorLocationHistory, getSensorsForLocation, setSensorLocation } from '../api/endpoints';
@@ -16,7 +17,6 @@ import { goToSensorMap } from '../navigation/ref';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { relativeTime, shortTimestamp } from '../utils/dates';
 import {
-  ACCURACY_FULL_M,
   ACCURACY_ZERO_M,
   SCAN_SECONDS,
   accuracyPercent,
@@ -36,9 +36,9 @@ import {
  * counting for more, and writes the result — with its accuracy and how many
  * fixes it came from — while the installer is still standing at the sensor.
  *
- * A hidden tab, like Sensor detail: reached from Home's quick links, from a
- * sensor's detail screen, or from the map's empty state, never from the tab
- * bar. The header's site filter scopes the picker.
+ * A hidden tab, like Sensor detail: reached from the sensor list's header or
+ * empty state, or from a sensor's detail screen, never from the tab bar. The
+ * header's site filter scopes the picker.
  *
  * Satellite count is NOT shown. Expo's location API reports position and
  * accuracy but not how many satellites are in view — that is Android's
@@ -148,8 +148,8 @@ function useGpsScan() {
     setStatus('idle');
   }, [stop]);
 
-  // Leaving the screen mid-scan must release the GPS: a watch left running
-  // keeps the receiver on and the battery draining behind another screen.
+  // The screen is a tab that never unmounts while the session lasts, so this
+  // is the last resort; leaving it is what normally stops the watch.
   useEffect(() => () => stop(), [stop]);
 
   return { status, fixes, elapsed, problem, canAskAgain, start, stop, reset };
@@ -283,15 +283,6 @@ export function SensorLocationScreen({ route }) {
   const rows = useMemo(() => (Array.isArray(list.data?.rows) ? list.data.rows : EMPTY_ROWS), [list.data]);
 
   const [selected, setSelected] = useState(wanted);
-  // A new arrival with a sensor in the params re-selects: the screen is a
-  // hidden tab and stays mounted, so its state outlives the visit.
-  useEffect(() => {
-    if (wanted) setSelected(wanted);
-    else if (wantedName) {
-      const hit = rows.find((r) => r.sensor_name === wantedName);
-      if (hit) setSelected(hit.name);
-    }
-  }, [wanted, wantedName, rows]);
 
   const row = useMemo(() => rows.find((r) => r.name === selected) || null, [rows, selected]);
   /**
@@ -308,8 +299,8 @@ export function SensorLocationScreen({ route }) {
     return sorted.map((r) => ({ value: r.name, label: pickerLabel(r) }));
   }, [rows]);
 
-
   const scan = useGpsScan();
+  const { reset: resetScan, stop: stopScan } = scan;
   const summary = useMemo(() => weightedPosition(scan.fixes), [scan.fixes]);
   const latest = scan.fixes.length ? scan.fixes[scan.fixes.length - 1] : null;
   const latestPercent = accuracyPercent(latest?.accuracy);
@@ -330,6 +321,41 @@ export function SensorLocationScreen({ route }) {
   const [saveError, setSaveError] = useState(null);
   const [saved, setSaved] = useState(null);
 
+  /**
+   * Each arrival starts the task over, and leaving stops the watch.
+   *
+   * The screen stays mounted between visits, so without this the picker, the
+   * fixes and the saved card from an hour ago are all still here — and those
+   * fixes were taken wherever the installer was standing then, which is not
+   * where they are now. A scan left running behind another screen keeps the
+   * receiver on for nothing.
+   *
+   * Arriving is told apart from coming back by the params: every entry point
+   * passes the pair, even as nulls, while a return from the header bell
+   * navigates here with none at all and must not cost the installer the sensor
+   * they had picked.
+   */
+  const params = route?.params;
+  useFocusEffect(
+    useCallback(() => {
+      if (params) {
+        setSelected(params.sensor || null);
+        setSaved(null);
+        setSaveError(null);
+        resetScan();
+      }
+      return stopScan;
+    }, [params, resetScan, stopScan]),
+  );
+
+  // Sensor detail sends the docname; a caller that has only the label is
+  // matched once the list arrives.
+  useEffect(() => {
+    if (selected || !wantedName) return;
+    const hit = rows.find((r) => r.sensor_name === wantedName);
+    if (hit) setSelected(hit.name);
+  }, [selected, wantedName, rows]);
+
   // Changing sensor drops the previous scan: its fixes were taken standing at
   // a different device, and saving them here would place this one there.
   const pickSensor = useCallback(
@@ -337,9 +363,9 @@ export function SensorLocationScreen({ route }) {
       setSelected(name);
       setSaved(null);
       setSaveError(null);
-      scan.reset();
+      resetScan();
     },
-    [scan],
+    [resetScan],
   );
 
   /** The unlocated ones, in picker order — the queue "Next" walks through. */
@@ -374,7 +400,7 @@ export function SensorLocationScreen({ route }) {
       invalidate('sensor_location_lookup');
       invalidate(cacheKey('sensor_location_history', { sensor: row.name }));
       setSaved(result);
-      scan.reset();
+      resetScan();
       list.refresh();
       history.refresh();
     } catch (err) {
@@ -382,7 +408,7 @@ export function SensorLocationScreen({ route }) {
     } finally {
       setSaving(false);
     }
-  }, [row, summary, scan, list, history]);
+  }, [row, summary, resetScan, list, history]);
 
   const save = useCallback(() => {
     if (!row || !summary) return;
@@ -423,88 +449,50 @@ export function SensorLocationScreen({ route }) {
     >
       {list.error ? <ErrorView error={list.error} onRetry={list.refresh} /> : null}
 
-      {/*
-        The count this whole screen exists to close, plus a way to close it
-        one sensor at a time without reopening the dropdown after every save —
-        the workflow is "walk the site", not "look one thing up".
-      */}
-      {!list.loading && rows.length ? (
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: spacing.sm,
-          }}
-        >
-          <Text style={[type.caption, { color: unlocated.length ? t.status.warning : t.status.good }]}>
-            {unlocated.length
-              ? `${unlocated.length} of ${rows.length} sensors at ${site || 'this site'} still need coordinates`
-              : `All ${rows.length} sensors at ${site || 'this site'} have coordinates`}
-          </Text>
-          {unlocated.length ? (
-            <Button label="Next" tone="ghost" compact onPress={nextUnlocated} />
-          ) : null}
-        </View>
-      ) : null}
+      {/* "Next" advances to the next sensor still without coordinates, so the
+          picker need not be reopened after every save.
 
-      <SelectField
-        label="Sensor"
-        value={selected}
-        options={options}
-        onChange={pickSensor}
-        placeholder={list.loading ? 'Loading sensors…' : rows.length ? 'Choose a sensor' : `No sensors at ${site || 'any of your sites'}`}
-        disabled={list.loading}
-      />
-
-      {row ? (
-        <Card style={{ marginBottom: spacing.lg }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm }}>
-            <View style={{ flex: 1 }}>
-              <Text numberOfLines={1} style={[type.heading, { color: t.textPrimary }]}>
-                {row.sensor_name}
-              </Text>
-              <Text numberOfLines={1} style={[type.caption, { color: t.textSecondary }]}>
-                {[row.sensor_site || site, row.sensor_type, row.monitoring].filter(Boolean).join(' · ')}
-              </Text>
-            </View>
-            {row.has_location ? (
-              <StatusChip tone="good" label="Set" />
-            ) : (
-              <StatusChip tone="warning" label="No coordinates" />
-            )}
-          </View>
-          {row.has_location ? (
-            <>
-              <Line label="Position" value={formatCoordinates(row.latitude, row.longitude)} />
-              <Line label="Accuracy" value={formatMetres(row.location_accuracy_m) || 'unknown'} />
-              {row.location_samples ? <Line label="Fixes" value={`${row.location_samples}`} /> : null}
-              <Line
-                label="Updated"
-                value={
-                  row.location_updated_on
-                    ? `${shortTimestamp(row.location_updated_on)}${row.location_updated_by ? ` · ${row.location_updated_by}` : ''}`
-                    : 'unknown'
-                }
-              />
-              <Button
-                label="View on map"
-                tone="ghost"
-                compact
-                style={{ alignSelf: 'flex-start', marginTop: spacing.sm }}
-                onPress={() => goToSensorMap({ focus: row.sensor_name })}
-              />
-            </>
-          ) : (
-            <Text style={[type.body, { color: t.textSecondary, lineHeight: 20 }]}>
-              This sensor has never been placed. Stand beside it, in the open if you can, and scan.
-            </Text>
-          )}
-        </Card>
-      ) : null}
+          The label sits above the ROW rather than inside the field: as the
+          field's own label it made that side of the row taller by a line, and
+          a button aligned to the bottom of it was visibly shorter than the
+          field it sat beside. Out here, the two are the only things in the row
+          and `stretch` makes them exactly as tall as each other. */}
+      <Text style={[type.label, { color: t.textSecondary, marginBottom: spacing.xs }]}>Sensor</Text>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'stretch',
+          gap: spacing.sm,
+          marginBottom: spacing.lg,
+        }}
+      >
+        {/* `compact` here is not about size: it is what makes the field take
+            the row's spare width and drop its own bottom margin. */}
+        <SelectField
+          compact
+          value={selected}
+          options={options}
+          onChange={pickSensor}
+          placeholder={
+            list.loading
+              ? 'Loading sensors…'
+              : list.error
+                ? // "No sensors here" is a claim about the site; a list that failed
+                  // to load is not evidence for it.
+                  'Sensors could not be loaded'
+                : rows.length
+                  ? 'Choose a sensor'
+                  : `No sensors at ${site || 'any of your sites'}`
+          }
+          disabled={list.loading || !rows.length}
+        />
+        {!list.loading && unlocated.length ? (
+          <Button label="Next" tone="ghost" compact onPress={nextUnlocated} />
+        ) : null}
+      </View>
 
       {/* ── The scan ── */}
-      <SectionTitle hint={`±${ACCURACY_FULL_M} m = 100 % · ±${ACCURACY_ZERO_M} m = 0 %`}>GPS scan</SectionTitle>
+      <SectionTitle>GPS scan</SectionTitle>
       <Card style={{ alignItems: 'center', marginBottom: spacing.lg }}>
         <ScanRing fraction={scan.elapsed / SCAN_SECONDS} percent={latestPercent} scanning={scanning} />
 
@@ -518,7 +506,7 @@ export function SensorLocationScreen({ route }) {
             borderTopColor: t.border,
           }}
         >
-          <Figure label="fixes" value={`${scan.fixes.length}`} />
+          <Figure label="fixes" value={scan.fixes.length ? `${scan.fixes.length}` : '—'} />
           <Figure label="latest fix" value={formatMetres(latest?.accuracy) || '—'} />
           <Figure
             label={scanning ? 'seconds left' : 'averaged'}
@@ -529,10 +517,6 @@ export function SensorLocationScreen({ route }) {
         {summary ? (
           <View style={{ alignSelf: 'stretch', marginTop: spacing.md }}>
             <Line label="Average" value={formatCoordinates(summary.latitude, summary.longitude)} />
-            <Line
-              label="Weighting"
-              value={`${summary.samples} fix${summary.samples === 1 ? '' : 'es'} · sharp fixes count more`}
-            />
             {moved != null && row?.has_location ? (
               <Line
                 label="Moves by"
@@ -542,12 +526,6 @@ export function SensorLocationScreen({ route }) {
             ) : null}
           </View>
         ) : null}
-
-        {/* Why the numbers are what they are, said once. */}
-        <Text style={[type.caption, { color: t.textMuted, textAlign: 'center', lineHeight: 16, marginTop: spacing.md }]}>
-          Accuracy is the radius the phone gives for each fix; ±{ACCURACY_FULL_M} m reads as 100 %. Fixes are
-          averaged with each weighted by 1/accuracy². Satellite counts are not available to the app.
-        </Text>
 
         {!Device.isDevice ? (
           <Text style={[type.caption, { color: t.status.warning, textAlign: 'center', lineHeight: 16, marginTop: spacing.sm }]}>
@@ -567,6 +545,14 @@ export function SensorLocationScreen({ route }) {
         {scan.status === 'error' ? (
           <Text style={[type.body, { color: t.status.serious, lineHeight: 20, textAlign: 'center', marginTop: spacing.md }]}>
             {scan.problem?.message || 'The GPS could not be read.'}
+          </Text>
+        ) : null}
+        {/* A scan that ends with nothing to save otherwise looks exactly like
+            one that was never started: same ring, same dashes, same buttons,
+            and a save button that stays disabled without saying why. */}
+        {scan.status === 'done' && !summary ? (
+          <Text style={[type.body, { color: t.status.warning, lineHeight: 20, textAlign: 'center', marginTop: spacing.md }]}>
+            No usable fix. Stand where the sky is open and scan again.
           </Text>
         ) : null}
 
@@ -606,6 +592,7 @@ export function SensorLocationScreen({ route }) {
           </View>
           <Line label="Sensor" value={saved.sensor_name || row?.sensor_name || ''} />
           <Line label="Position" value={formatCoordinates(saved.latitude, saved.longitude)} />
+          {saved.physical_location ? <Line label="Place" value={saved.physical_location} /> : null}
           <Line label="Accuracy" value={formatMetres(saved.location_accuracy_m) || 'unknown'} />
           {saved.location_samples ? <Line label="Fixes" value={`${saved.location_samples}`} /> : null}
           {saved.previous ? (

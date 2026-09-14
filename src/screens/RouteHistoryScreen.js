@@ -715,14 +715,6 @@ export function RouteHistoryScreen() {
             <StatTile label="Active 30d" value={installSummary?.active_30d ?? null} />
           </View>
 
-          {/* Said where the numbers are, not in a help page nobody opens. */}
-          <Text style={[type.caption, { color: t.textMuted, marginBottom: spacing.lg, lineHeight: 16 }]}>
-            An IP identifies a network, not a device — phones behind carrier NAT share one, and it
-            changes between Wi-Fi and mobile data — so the device count is the figure to trust. One
-            row is one person on one phone: people sign in on several phones and phones get shared,
-            so this reports the version per person per device, not a headcount.
-          </Text>
-
           <SectionTitle
             hint={
               newestVersion ? `Newest build in the field: ${newestVersion}` : 'No versions reported'
