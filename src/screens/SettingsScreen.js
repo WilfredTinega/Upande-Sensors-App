@@ -1,6 +1,14 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Linking, Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+
+import {
+  PUSH_STATUS,
+  getPushState,
+  openNotificationSettings,
+  registerForPushNotifications,
+  subscribeToPushState,
+} from '../api/push';
 
 import {
   Button,
@@ -104,6 +112,56 @@ export function SettingsScreen() {
     () => (Array.isArray(roles.data) ? roles.data : []).includes(PRIVILEGED_ROLE),
     [roles.data],
   );
+
+  /**
+   * Push registration state, from the module that owns it.
+   *
+   * Registration runs at sign-in, well before this screen opens, so the row
+   * renders its verdict rather than a spinner; the subscription is for the
+   * "Turn on" button, whose result arrives asynchronously.
+   */
+  const [push, setPush] = useState(getPushState());
+  const [pushBusy, setPushBusy] = useState(false);
+  useEffect(() => subscribeToPushState(setPush), []);
+
+  const pushLine = useMemo(() => {
+    switch (push.status) {
+      case PUSH_STATUS.ON:
+        return { label: 'Alerts on', detail: 'Limit breaches are pushed to this phone.', tone: 'good' };
+      case PUSH_STATUS.DENIED:
+        return { label: 'Alerts off (permission denied)', detail: 'Notifications are blocked for this app.', tone: 'warning' };
+      case PUSH_STATUS.UNCONFIGURED:
+        return { label: 'Alerts not configured on this build', detail: 'No Expo project id — see README → Push notifications.', tone: null };
+      case PUSH_STATUS.UNAVAILABLE:
+        return { label: 'Alerts not available on this server', detail: 'The server is older than the app.', tone: null };
+      case PUSH_STATUS.EXPO_GO:
+        return { label: 'Alerts unavailable in Expo Go', detail: 'Remote push needs a built APK; Expo Go dropped it in SDK 53.', tone: null };
+      case PUSH_STATUS.UNSUPPORTED:
+        return { label: 'Alerts off', detail: 'Not available in development or on an emulator.', tone: null };
+      case PUSH_STATUS.FAILED:
+        return { label: 'Alerts off', detail: push.message || 'Registration failed.', tone: 'serious' };
+      default:
+        return { label: 'Alerts', detail: 'Checking…', tone: null };
+    }
+  }, [push]);
+
+  /**
+   * Re-run registration. Android will not re-prompt once a denial has been
+   * given, so a second denial sends the user to the system settings page,
+   * which is the only place left where the answer can be changed.
+   */
+  const onTurnOnPush = useCallback(async () => {
+    setPushBusy(true);
+    try {
+      const before = push.status;
+      const after = await registerForPushNotifications({ appVersion: APP_VERSION });
+      if (after.status === PUSH_STATUS.DENIED && before === PUSH_STATUS.DENIED) {
+        await openNotificationSettings();
+      }
+    } finally {
+      setPushBusy(false);
+    }
+  }, [push.status]);
 
   const onToggleBiometrics = async (next) => {
     setTogglingBio(true);
@@ -347,6 +405,40 @@ export function SettingsScreen() {
             </Pressable>
           </Card>
       </>
+
+      {/* Push alerts for limit breaches. One line of status and, when the
+          answer was "no", the one action that can change it. Never an error
+          box: a phone without alerts is a phone without alerts, and the app
+          works the same either way. */}
+      <SectionTitle>Notifications</SectionTitle>
+      <Card style={{ marginBottom: spacing.xl }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+          <Ionicons
+            name={push.status === PUSH_STATUS.ON ? 'notifications-outline' : 'notifications-off-outline'}
+            size={22}
+            color={push.status === PUSH_STATUS.ON ? t.accent : t.textMuted}
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>
+              {pushLine.label}
+            </Text>
+            <Text style={[type.caption, { color: t.textSecondary, marginTop: 2, lineHeight: 16 }]}>
+              {pushLine.detail}
+            </Text>
+          </View>
+          {pushLine.tone ? <StatusChip tone={pushLine.tone} label={pushLine.tone === 'good' ? 'On' : 'Off'} /> : null}
+        </View>
+        {push.status === PUSH_STATUS.DENIED || push.status === PUSH_STATUS.FAILED ? (
+          <Button
+            label="Turn on"
+            tone="ghost"
+            compact
+            style={{ marginTop: spacing.md }}
+            onPress={onTurnOnPush}
+            loading={pushBusy}
+          />
+        ) : null}
+      </Card>
 
       <SectionTitle>Server</SectionTitle>
       <Card style={{ marginBottom: spacing.xl }}>

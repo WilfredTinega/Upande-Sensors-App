@@ -19,6 +19,7 @@ import { TTL_REFERENCE, TTL_SERIES, cacheKey, invalidate } from '../api/cache';
 import {
   ISSUE_KINDS,
   firstAssignee,
+  getInstalls,
   getUserFullNames,
   getUserRoles,
   getAuthActivity,
@@ -26,7 +27,9 @@ import {
   getRouteHistory,
   getRouteHistoryCount,
 } from '../api/endpoints';
+import { compareVersions } from '../api/updates';
 import { useAuth } from '../context/AuthContext';
+import { APP_VERSION } from '../context/UpdateContext';
 import { useNavigation } from '@react-navigation/native';
 
 import { useQuery } from '../hooks/useQuery';
@@ -44,6 +47,23 @@ function statusTone(status) {
   return 'warning';
 }
 
+/**
+ * "Samsung SM-A125F", without saying Samsung twice.
+ *
+ * Android reports a model code rather than a marketing name, so the brand in
+ * front of it is what makes the row recognisable — except on the phones whose
+ * model string already starts with it, and on iOS where `modelName` is the
+ * marketing name outright.
+ */
+function deviceLabel(row) {
+  const brand = String(row?.device_brand || '').trim();
+  const model = String(row?.device_model || '').trim();
+  if (model && brand && !model.toLowerCase().startsWith(brand.toLowerCase())) {
+    return `${brand} ${model}`;
+  }
+  return model || brand || row?.device_name || 'Unknown device';
+}
+
 const PAGE_SIZE = 50;
 /** How often the issue list re-reads statuses while it is open. */
 const ISSUE_POLL_MS = 60000;
@@ -57,7 +77,8 @@ export function RouteHistoryScreen() {
   const [rangeKey, setRangeKey] = useState('today');
   const [page, setPage] = useState(0);
   const [authPage, setAuthPage] = useState(0);
-  const [view, setView] = useState('screens'); // screens | sessions
+  const [devicePage, setDevicePage] = useState(0);
+  const [view, setView] = useState('screens'); // screens | sessions | devices | issues
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
 
@@ -149,6 +170,21 @@ export function RouteHistoryScreen() {
     view === 'issues' ? cacheKey('issues', { kind }) : null,
     () => getIssues({ kind, pageLength: 50 }),
     { ttl: TTL_SERIES, pollMs: ISSUE_POLL_MS },
+  );
+
+  /**
+   * The device register.
+   *
+   * Deliberately not filtered by the date range: the question is how many
+   * phones have the app installed, which is a running total rather than
+   * something that happened between two dates. "Active in 7 / 30 days" in the
+   * summary is where recency is answered, and it is computed by the server over
+   * the whole register rather than over whatever window is selected here.
+   */
+  const installs = useQuery(
+    view === 'devices' ? cacheKey('installs', { start: devicePage * PAGE_SIZE }) : null,
+    () => getInstalls({ start: devicePage * PAGE_SIZE, pageLength: PAGE_SIZE }),
+    { ttl: TTL_SERIES },
   );
 
   const countKey = cacheKey('route_history_count', { dateFrom, dateTo });
@@ -278,6 +314,62 @@ export function RouteHistoryScreen() {
     [names.data],
   );
 
+  /* ── Device register ──────────────────────────────────────────────────── */
+
+  const installRows = useMemo(
+    () => (Array.isArray(installs.data?.rows) ? installs.data.rows : []),
+    [installs.data],
+  );
+  const installSummary = installs.data?.summary || null;
+  const installTotal = isMeasured(installs.data?.total) ? Number(installs.data.total) : null;
+  const installLastPage =
+    installTotal === null ? null : Math.max(0, Math.ceil(installTotal / PAGE_SIZE) - 1);
+  const installFrom = installRows.length ? devicePage * PAGE_SIZE + 1 : 0;
+  const installTo = devicePage * PAGE_SIZE + installRows.length;
+
+  const byUser = useMemo(
+    () => (Array.isArray(installSummary?.by_user) ? installSummary.by_user : []),
+    [installSummary],
+  );
+
+  const byModel = useMemo(
+    () =>
+      (Array.isArray(installSummary?.by_model) ? installSummary.by_model : [])
+        .filter((r) => r?.device_model)
+        .map((r) => ({ label: r.device_model, value: Number(r.count) || 0 })),
+    [installSummary],
+  );
+
+  /**
+   * The newest build anyone is on, against which a row reads as behind.
+   *
+   * Taken from the register rather than from `APP_VERSION` alone: the highest
+   * version any phone has reported is the newest build that actually exists in
+   * the field, and that is what an out-of-date phone is behind. `APP_VERSION`
+   * is folded in so the reader's own just-updated build counts before its own
+   * report lands — otherwise, for up to an hour, a stale maximum would tell
+   * everyone including the reader that they were current.
+   */
+  const newestVersion = useMemo(() => {
+    const seen = [
+      APP_VERSION,
+      ...byUser.map((r) => r.app_version),
+      ...installRows.map((r) => r.app_version),
+      ...(Array.isArray(installSummary?.by_app_version) ? installSummary.by_app_version : []).map(
+        (r) => r.app_version,
+      ),
+    ].filter(Boolean);
+    return seen.reduce(
+      (best, version) => (best === null || compareVersions(version, best) > 0 ? version : best),
+      null,
+    );
+  }, [byUser, installRows, installSummary]);
+
+  const isBehind = useCallback(
+    (version) => !!(version && newestVersion && compareVersions(version, newestVersion) < 0),
+    [newestVersion],
+  );
+
   const total = isMeasured(count.data) ? Number(count.data) : null;
   const lastPage = total === null ? null : Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
   const from = routeRows.length ? page * PAGE_SIZE + 1 : 0;
@@ -286,10 +378,14 @@ export function RouteHistoryScreen() {
   const refresh = useCallback(() => {
     invalidate('auth_activity');
     invalidate('route_history');
+    invalidate('installs');
     auth.refresh();
     count.refresh();
+    // A no-op while the register is not on screen: `useQuery` skips a refresh
+    // for a null key, so pulling on another view costs nothing here.
+    installs.refresh();
     return routes.refresh();
-  }, [auth, count, routes]);
+  }, [auth, count, installs, routes]);
 
   // Both doctypes grant read to System Manager only, so a refusal here is about
   // the role — not about there being no activity.
@@ -315,16 +411,22 @@ export function RouteHistoryScreen() {
 
   useLayoutEffect(() => {
     navigation.setOptions({
+      // A fourth segment needs the width, and it has to come from the title:
+      // squeezing the switch instead would clip the labels to initials. The
+      // shorter word says the same thing next to a control that names each
+      // view anyway.
+      headerTitle: isSystemManager ? 'Activity' : 'App activity',
       // With one view there is nothing to switch between, so the control goes
       // rather than sitting there as a single dead tab.
       headerRight: isSystemManager
         ? () => (
-            <View style={{ paddingRight: spacing.md, width: 214 }}>
+            <View style={{ paddingRight: spacing.md, width: 252 }}>
               <Segmented
                 compact
                 options={[
                   { label: 'Screens', value: 'screens' },
                   { label: 'Sign-ins', value: 'sessions' },
+                  { label: 'Devices', value: 'devices' },
                   { label: 'Issues', value: 'issues' },
                 ]}
                 value={view}
@@ -556,6 +658,253 @@ export function RouteHistoryScreen() {
     </>
   );
 
+  /**
+   * Devices: the install register.
+   *
+   * Two numbers that are easy to confuse, so they are named apart rather than
+   * placed side by side and left to the reader: "Installs ever" is a counter
+   * the server only ever increments, and "Devices now" is how many records
+   * exist at this moment. They differ by everything that has been removed.
+   *
+   * Then the per-user list, which is the point of the section — which build
+   * each person is actually running — then the model breakdown, then the raw
+   * rows with the IP the server observed.
+   */
+  const devicesView = (
+    <>
+      {installs.loading ? (
+        <>
+          <SkeletonStatTiles count={3} style={{ marginBottom: spacing.lg }} />
+          <SkeletonList count={5} />
+        </>
+      ) : installs.error?.isMissingEndpoint ? (
+        // Not an error: a version gap. An empty register would read as "nobody
+        // has ever installed this", which is a different and wrong claim.
+        <EmptyState
+          title="This server has no device register"
+          message={
+            'The install register arrived in a later upande_sensors than the one on this site. ' +
+            'Update the app on the server and the devices will appear here as they check in.'
+          }
+        />
+      ) : installs.error ? (
+        installs.error.isPermission ? (
+          <EmptyState
+            title="Not available for this account"
+            message={
+              'The device register is readable by System Manager accounts only. Ask an ' +
+              'administrator if you need to review which phones are running the app.'
+            }
+          />
+        ) : (
+          <ErrorView error={installs.error} onRetry={() => installs.refresh()} />
+        )
+      ) : (
+        <>
+          <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm }}>
+            <StatTile
+              label="Installs ever"
+              value={installSummary?.total_installs ?? null}
+              accent={t.series[0]}
+            />
+            <StatTile label="Devices now" value={installSummary?.devices ?? null} />
+          </View>
+          <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md }}>
+            <StatTile label="People" value={installSummary?.users ?? null} />
+            <StatTile label="Active 7d" value={installSummary?.active_7d ?? null} />
+            <StatTile label="Active 30d" value={installSummary?.active_30d ?? null} />
+          </View>
+
+          {/* Said where the numbers are, not in a help page nobody opens. */}
+          <Text style={[type.caption, { color: t.textMuted, marginBottom: spacing.lg, lineHeight: 16 }]}>
+            An IP identifies a network, not a device — phones behind carrier NAT share one, and it
+            changes between Wi-Fi and mobile data — so the device count is the figure to trust. One
+            row is one person on one phone: people sign in on several phones and phones get shared,
+            so this reports the version per person per device, not a headcount.
+          </Text>
+
+          <SectionTitle
+            hint={
+              newestVersion ? `Newest build in the field: ${newestVersion}` : 'No versions reported'
+            }
+          >
+            Who is on which version
+          </SectionTitle>
+
+          {byUser.length ? (
+            <Card padded={false} style={{ marginBottom: spacing.lg }}>
+              {byUser.map((row, i) => {
+                const behind = isBehind(row.app_version);
+                return (
+                  <View
+                    key={`${row.user}-${row.device_model || i}`}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: spacing.md,
+                      paddingHorizontal: spacing.lg,
+                      paddingVertical: 10,
+                      borderBottomWidth: i === byUser.length - 1 ? 0 : StyleSheet.hairlineWidth,
+                      borderBottomColor: t.border,
+                    }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text numberOfLines={1} style={[type.body, { color: t.textPrimary }]}>
+                        {row.full_name || row.user || 'Unknown account'}
+                      </Text>
+                      <Text numberOfLines={1} style={[type.caption, { color: t.textMuted }]}>
+                        {[
+                          deviceLabel(row),
+                          row.devices > 1 ? `${row.devices} devices` : null,
+                          row.logins ? `${row.logins} sign-in${row.logins === 1 ? '' : 's'}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                      {/* Behind is a chip, not a colour: the word "out of date"
+                          is carried by the glyph and the tone together, so the
+                          list is readable without comparing versions by eye. */}
+                      {behind ? (
+                        <StatusChip tone="warning" label={row.app_version || 'unknown'} />
+                      ) : (
+                        <Text style={[type.caption, { color: t.textSecondary }]}>
+                          {row.app_version || '—'}
+                        </Text>
+                      )}
+                      <Text style={[type.caption, { color: t.textMuted }]}>
+                        {relativeTime(row.last_seen) || fullTimestamp(row.last_seen) || '—'}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </Card>
+          ) : (
+            <Card style={{ marginBottom: spacing.lg }}>
+              <Text style={[type.caption, { color: t.textMuted }]}>
+                Nobody has signed in from a registered device yet.
+              </Text>
+            </Card>
+          )}
+
+          <SectionTitle>By phone model</SectionTitle>
+          <Card style={{ marginBottom: spacing.lg }}>
+            {byModel.length ? (
+              <BarList items={byModel} />
+            ) : (
+              <Text style={[type.caption, { color: t.textMuted }]}>
+                No models reported yet.
+              </Text>
+            )}
+          </Card>
+
+          <SectionTitle
+            hint={
+              installTotal === null
+                ? `${installRows.length} records`
+                : `${installFrom.toLocaleString()}–${installTo.toLocaleString()} of ${installTotal.toLocaleString()}`
+            }
+          >
+            Devices
+          </SectionTitle>
+
+          {installRows.length ? (
+            <Card padded={false}>
+              {installRows.map((row, i) => (
+                <View
+                  key={`${row.install_id}-${row.user || i}`}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: spacing.md,
+                    paddingHorizontal: spacing.lg,
+                    paddingVertical: 10,
+                    borderBottomWidth: i === installRows.length - 1 ? 0 : StyleSheet.hairlineWidth,
+                    borderBottomColor: t.border,
+                  }}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text numberOfLines={1} style={[type.body, { color: t.textPrimary }]}>
+                      {deviceLabel(row)}
+                    </Text>
+                    <Text numberOfLines={1} style={[type.caption, { color: t.textMuted }]}>
+                      {[
+                        row.full_name || row.user || 'Not signed in',
+                        row.app_version || 'unknown version',
+                        // Only where it happened: a zero would put "0 updates"
+                        // on every phone that has never been updated, which is
+                        // most of them.
+                        row.upgrades > 0
+                          ? `${row.upgrades} update${row.upgrades === 1 ? '' : 's'}`
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                    <Text style={[type.caption, { color: t.textSecondary }]}>
+                      {relativeTime(row.last_seen) || fullTimestamp(row.last_seen) || '—'}
+                    </Text>
+                    <Text numberOfLines={1} style={[type.caption, { color: t.textMuted }]}>
+                      {row.ip_address || 'no IP'}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </Card>
+          ) : (
+            <EmptyState
+              title="No devices registered yet"
+              message="A phone appears here the first time it is used to sign in."
+            />
+          )}
+
+          {installRows.length ? (
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: spacing.sm,
+                marginTop: spacing.lg,
+              }}
+            >
+              <Button
+                label="Previous"
+                tone="ghost"
+                compact
+                style={{ flex: 1 }}
+                disabled={devicePage === 0}
+                onPress={() => setDevicePage((p) => Math.max(0, p - 1))}
+              />
+              <Text
+                style={[type.caption, { color: t.textSecondary, minWidth: 82, textAlign: 'center' }]}
+              >
+                {installLastPage === null
+                  ? `Page ${devicePage + 1}`
+                  : `Page ${devicePage + 1} of ${installLastPage + 1}`}
+              </Text>
+              <Button
+                label="Next"
+                tone="ghost"
+                compact
+                style={{ flex: 1 }}
+                disabled={
+                  installLastPage === null
+                    ? installRows.length < PAGE_SIZE
+                    : devicePage >= installLastPage
+                }
+                onPress={() => setDevicePage((p) => p + 1)}
+              />
+            </View>
+          ) : null}
+        </>
+      )}
+    </>
+  );
+
   /** Screens: the paged route-history list. */
   const recording = getRecordingStatus();
 
@@ -705,7 +1054,9 @@ export function RouteHistoryScreen() {
         />
       }
     >
-      {roles.loading ? null : view === 'issues' ? null : rangePicker}
+      {/* No range on Devices either: the register is a running total, not a
+          window — see the `installs` query. */}
+      {roles.loading ? null : view === 'issues' || view === 'devices' ? null : rangePicker}
 
       {/* Until the roles come back it isn't known which view this account is
           allowed to land on, and rendering the default first shows a
@@ -724,7 +1075,12 @@ export function RouteHistoryScreen() {
         />
       ) : (
         <>
-          {view === 'sessions' ? (
+          {view === 'devices' ? (
+            // Behind the same `denied` gate as the other two manager views, so
+            // an account that cannot read activity never sees the register
+            // either; its own loading and error states live inside.
+            devicesView
+          ) : view === 'sessions' ? (
             auth.loading || auth.refreshing ? (
               <>
                 <SkeletonStatTiles count={2} style={{ marginBottom: spacing.lg }} />

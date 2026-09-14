@@ -1,25 +1,30 @@
 import React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, Pressable, View } from 'react-native';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { ChartsScreen } from '../screens/ChartsScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
+import { HomeScreen } from '../screens/HomeScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { ReadingsScreen } from '../screens/ReadingsScreen';
 import { RouteHistoryScreen } from '../screens/RouteHistoryScreen';
+import { SensorDetailScreen } from '../screens/SensorDetailScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { OfflineToast } from '../components/OfflineToast';
 import { FloatingSidebar, SidebarToggle } from '../components/FloatingSidebar';
+import { PushRegistrar } from '../components/PushRegistrar';
 import { ReportButton } from '../components/ReportButton';
+import { ReadingsTabIcon } from '../components/TabIcons';
 import { UserAvatar } from '../components/UserAvatar';
 import {
   DashboardHeaderTitle,
   HeaderSiteFilter,
   HeaderThemeSwitch,
+  HomeHeaderTitle,
 } from '../components/HeaderControls';
-import { navigationRef, setCurrentRoute } from './ref';
+import { SENSOR_DETAIL_ROUTE, goToLive, navigationRef, setCurrentRoute } from './ref';
 import { recordRoute, setRouteHistoryEnabled } from '../utils/routeHistory';
 import { DashboardProvider } from '../context/DashboardContext';
 import { useAuth } from '../context/AuthContext';
@@ -30,9 +35,14 @@ import { font } from '../theme';
 const Tab = createBottomTabNavigator();
 
 const ICONS = {
+  Home: ['home', 'home-outline'],
   Live: ['pulse', 'pulse-outline'],
-  Readings: ['list', 'list-outline'],
-  Dashboard: ['analytics', 'analytics-outline'],
+  // Readings is not here: its three bars are drawn by hand in TabIcons.js,
+  // because neither Ionicons three-bar glyph matches the weight of the rest.
+  // A bar chart, not the line-with-points 'analytics' glyph: at 24dp the
+  // line reads as a stray squiggle, and bars are what a chart looks like
+  // from across the room.
+  Dashboard: ['bar-chart', 'bar-chart-outline'],
   Account: ['person-circle', 'person-circle-outline'],
 };
 
@@ -41,15 +51,32 @@ const ICONS = {
  *
  * It was a tab that cancelled its own navigation and opened a confirmation
  * instead — an action dressed as a destination, sitting one mis-tap away from
- * the screens people use all day. The tab bar is now four destinations that all
+ * the screens people use all day. The tab bar is now five destinations that all
  * behave the same way, and the confirmation lives next to the account it ends.
  */
 
-/** Screens the dashboard-tab sidebar applies to. */
+/**
+ * Screens the dashboard-tab sidebar applies to. Home is deliberately not one
+ * of them: its dashboards grid IS the tab list, so an opener there would offer
+ * the same choice twice.
+ */
 const SIDEBAR_ROUTES = new Set(['Live', 'Readings', 'Dashboard']);
 
 /** Screens whose data is scoped by the selected site. */
-const SITE_FILTER_ROUTES = new Set(['Live', 'Readings', 'Dashboard']);
+const SITE_FILTER_ROUTES = new Set(['Home', 'Live', 'Readings', 'Dashboard']);
+
+/**
+ * The one account whose screen visits are not recorded.
+ *
+ * Route History is an audit of how the app is used by the people it is for.
+ * The Administrator is the account that deploys, tests and debugs it — every
+ * Administrator visit is someone checking that a screen works, not someone
+ * using it — and on a site where the same person also does support, those
+ * visits outnumber real ones and swamp the activity report. The server applies
+ * the identical rule to rows tagged `source: 'app'` (see `logRoutes`), so a
+ * build that forgot this check would be refused rather than trusted.
+ */
+const UNTRACKED_USER = 'Administrator';
 
 function SignedInApp() {
   const t = useTheme();
@@ -67,13 +94,18 @@ function SignedInApp() {
    */
   // The account is passed in because a direct insert has to name the user it
   // is recording; only the framework's queued route fills that in itself.
-  setRouteHistoryEnabled(true, user?.name);
+  setRouteHistoryEnabled(!!user?.name && user.name !== UNTRACKED_USER, user?.name);
   React.useEffect(() => () => setRouteHistoryEnabled(false), []);
 
   const onRouteChange = () => {
-    const name = navigationRef.getCurrentRoute()?.name;
+    const current = navigationRef.getCurrentRoute();
+    const name = current?.name;
     setCurrentRoute(name);
-    recordRoute(name);
+    // A sensor's chart is logged with the sensor's name: "SensorDetail" alone
+    // would record every one of them identically, the way "Dashboard" alone
+    // would for the tabs (see `selectTab`).
+    const sensorName = name === SENSOR_DETAIL_ROUTE ? current?.params?.sensorName : null;
+    recordRoute(sensorName ? `Sensor · ${sensorName}` : name);
   };
 
   const navTheme = {
@@ -98,8 +130,10 @@ function SignedInApp() {
           onStateChange={onRouteChange}
         >
           <Tab.Navigator
-            // Land on the dashboard: it is the view people open the app for.
-            initialRouteName="Dashboard"
+            // Land on Home: the site's status at a glance, then the dashboards
+            // as a grid. Someone opening the app to check on something gets
+            // the answer without choosing a screen first.
+            initialRouteName="Home"
             screenOptions={({ route }) => ({
               headerStyle: { backgroundColor: t.surface },
               headerTitleStyle: {
@@ -124,13 +158,20 @@ function SignedInApp() {
               tabBarActiveTintColor: t.accent,
               tabBarInactiveTintColor: t.textMuted,
               tabBarStyle: { backgroundColor: t.surface, borderTopColor: t.border },
-              // Five tabs on a narrow phone leaves ~70dp each. 10pt with font
-              // scaling pinned keeps the longest label ("Dashboards") on one
-              // line instead of ellipsing to "Dashboa…" at large system fonts.
-              tabBarLabelStyle: { fontSize: 10, fontWeight: '600', fontFamily: font('600') },
+              /**
+               * Icons alone, no captions.
+               *
+               * Five labels on a narrow phone left ~70dp each and the longest
+               * ("Dashboard") only fitted with the font size pinned at 10pt —
+               * small enough to read as noise under a glyph that already says
+               * the same thing. The label is still set on every screen below:
+               * it feeds the accessibility name, so a screen reader announces
+               * "Readings" even though nothing is drawn.
+               */
+              tabBarShowLabel: false,
               tabBarAllowFontScaling: false,
-              // flex: 1 on every visible item divides the bar evenly, whatever
-              // the label lengths.
+              // flex: 1 on every visible item divides the bar evenly, and the
+              // icon centres in its share now that nothing sits beneath it.
               tabBarItemStyle: { flex: 1, paddingHorizontal: 2 },
               tabBarIcon: ({ focused, color, size }) => {
                 // The account tab shows who is signed in — their ERPNext avatar,
@@ -138,7 +179,7 @@ function SignedInApp() {
                 if (route.name === 'Account') {
                   return (
                     <View>
-                      <UserAvatar size={size ?? 22} focused={focused} color={color} />
+                      <UserAvatar size={size ?? 24} focused={focused} color={color} />
                       {/* A new APK is the one thing the app must volunteer:
                           nothing else will tell a field phone it is out of
                           date. A dot, not a count — there is only ever one
@@ -163,9 +204,12 @@ function SignedInApp() {
                     </View>
                   );
                 }
+                if (route.name === 'Readings') {
+                  return <ReadingsTabIcon size={size ?? 24} color={color} />;
+                }
                 const [active, inactive] = ICONS[route.name] || ICONS.Live;
                 return (
-                  <Ionicons name={focused ? active : inactive} size={size ?? 22} color={color} />
+                  <Ionicons name={focused ? active : inactive} size={size ?? 24} color={color} />
                 );
               },
             })}
@@ -177,14 +221,33 @@ function SignedInApp() {
               each reads correctly in its own place.
             */}
             <Tab.Screen
+              name="Home"
+              component={HomeScreen}
+              // The mark instead of the word — the tab bar's house glyph
+              // already says "Home", so the title is free to be the app.
+              options={{
+                headerTitle: () => <HomeHeaderTitle />,
+                tabBarLabel: 'Home',
+                tabBarAccessibilityLabel: 'Home tab',
+              }}
+            />
+            <Tab.Screen
               name="Live"
               component={DashboardScreen}
-              options={{ headerTitle: 'Live readings', tabBarLabel: 'Live' }}
+              options={{
+                headerTitle: 'Live readings',
+                tabBarLabel: 'Live',
+                tabBarAccessibilityLabel: 'Live readings tab',
+              }}
             />
             <Tab.Screen
               name="Readings"
               component={ReadingsScreen}
-              options={{ headerTitle: 'Sensor readings', tabBarLabel: 'Readings' }}
+              options={{
+                headerTitle: 'Sensor readings',
+                tabBarLabel: 'Readings',
+                tabBarAccessibilityLabel: 'Sensor readings tab',
+              }}
             />
             <Tab.Screen
               name="Dashboard"
@@ -192,6 +255,7 @@ function SignedInApp() {
               options={{
                 headerTitle: () => <DashboardHeaderTitle />,
                 tabBarLabel: 'Dashboard',
+                tabBarAccessibilityLabel: 'Dashboard tab',
               }}
             />
             {/* Reached from Account, so it carries no tab button either. */}
@@ -204,15 +268,54 @@ function SignedInApp() {
                 tabBarItemStyle: { display: 'none' },
               }}
             />
+            {/* Reached by tapping a sensor on Live. Hidden for the same reason
+                as App activity: it is about one sensor, so it is a place you
+                arrive at from something, never a destination in its own right.
+                The header title names the sensor the params carry. */}
+            <Tab.Screen
+              name="SensorDetail"
+              component={SensorDetailScreen}
+              options={({ route }) => ({
+                headerTitle: route.params?.sensorName || 'Sensor',
+                // Back to Live, where the card was tapped — a hidden tab has no
+                // button of its own to return by.
+                headerLeft: () => (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Back to live readings"
+                    onPress={goToLive}
+                    hitSlop={10}
+                    style={({ pressed }) => ({
+                      paddingLeft: 16,
+                      paddingRight: 8,
+                      paddingVertical: 8,
+                      opacity: pressed ? 0.6 : 1,
+                    })}
+                  >
+                    <Ionicons name="chevron-back" size={24} color={t.textPrimary} />
+                  </Pressable>
+                ),
+                tabBarButton: () => null,
+                tabBarItemStyle: { display: 'none' },
+              })}
+            />
             <Tab.Screen
               name="Account"
               component={SettingsScreen}
-              options={{ headerTitle: 'Account', tabBarLabel: 'Account' }}
+              options={{
+                headerTitle: 'Account',
+                tabBarLabel: 'Account',
+                tabBarAccessibilityLabel: 'Account tab',
+              }}
             />
           </Tab.Navigator>
         </NavigationContainer>
 
         <FloatingSidebar />
+
+        {/* Renders nothing. Inside DashboardProvider because a tapped alert
+            selects the site it happened at before opening Live. */}
+        <PushRegistrar />
 
         {/* Outside the navigator so it floats over every screen, and so the
             screenshot it captures is of the screen rather than of itself. */}

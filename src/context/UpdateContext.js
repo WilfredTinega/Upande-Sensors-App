@@ -40,12 +40,39 @@ import { downloadApk, launchInstaller } from '../utils/installApk';
  * dialog, no second tap, no waiting on the Account screen. The update downloads
  * while the app is in use and the system installer opens by itself when it is
  * ready.
+ *
+ * ── Two update channels, two loops ───────────────────────────────────────────
+ *
+ * The above is the APK channel: a GitHub Releases check, once a day, for a
+ * build whose *runtime* moved. Independent of it is the OTA channel below — the
+ * JS bundle for a patch inside the same runtime, served by `updates.url`. That
+ * one is checked on every launch and every return to the foreground (throttled
+ * to once in five minutes) and applied without asking, because a patch is by
+ * definition something the user should simply have. `checkAutomatically:
+ * ON_LOAD` in app.json also lets the native side download at startup; its
+ * result arrives through `useUpdates().isUpdatePending` and is applied by the
+ * same path, so however the bundle got here it is installed the same way.
  */
 
 const UpdateContext = createContext(null);
 
 /** The running build, as stamped into app.json by the release workflow. */
 export const APP_VERSION = Constants.expoConfig?.version ?? null;
+
+const IS_DEV = typeof __DEV__ !== 'undefined' && __DEV__;
+
+/**
+ * Inside this window after launch a fetched bundle is applied by an immediate
+ * restart, with no toast: nothing has been started that a restart could
+ * interrupt, and there is barely anything on screen to explain it over. Past
+ * it, the user is mid-task, so the restart is announced first.
+ */
+const OTA_LAUNCH_WINDOW_MS = 20 * 1000;
+/** How long the "Updating…" toast is shown before the restart. */
+const OTA_TOAST_MS = 2500;
+/** At most one OTA check per foreground transition per this interval. */
+const OTA_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+const launchedAt = Date.now();
 
 export function UpdateProvider({ children }) {
   const [update, setUpdate] = useState(null);
@@ -79,6 +106,109 @@ export function UpdateProvider({ children }) {
    * app" and "silently never installs".
    */
   const pending = useRef(null);
+
+  /* ── OTA: the JS bundle inside the same runtime ───────────────────────── */
+
+  const [otaChecking, setOtaChecking] = useState(false);
+  /** A bundle is downloaded and the restart is seconds away. Drives the toast. */
+  const [otaReady, setOtaReady] = useState(false);
+  const otaBusy = useRef(false);
+  const otaLastCheck = useRef(0);
+  const otaApplied = useRef(false);
+
+  /**
+   * Restart into a bundle that has finished downloading.
+   *
+   * Two timings, decided by how long the app has been up. Just after launch the
+   * restart is immediate: nothing is in progress and there is nothing to
+   * explain it over. Later, the toast is shown first, so that the app going
+   * away and coming back reads as an update and not as a crash — which is what
+   * an unannounced restart looks like, and what gets an app reinstalled.
+   *
+   * Guarded so it runs once per process: the native ON_LOAD download and this
+   * hook's own fetch can both report the same bundle as pending.
+   */
+  const applyOta = useCallback(async () => {
+    if (otaApplied.current) return;
+    otaApplied.current = true;
+    try {
+      if (Date.now() - launchedAt >= OTA_LAUNCH_WINDOW_MS) {
+        setOtaReady(true);
+        await new Promise((resolve) => setTimeout(resolve, OTA_TOAST_MS));
+      }
+      await Updates.reloadAsync();
+    } catch (err) {
+      // A reload that fails leaves the bundle installed for the next launch.
+      // Nothing to tell the user; the next cold start picks it up.
+      otaApplied.current = false;
+      setOtaReady(false);
+      if (IS_DEV) console.log('[ota] reload', err?.message);
+    }
+  }, []);
+
+  /**
+   * Ask the update server whether a newer bundle exists, and install it if so.
+   *
+   * Every failure is swallowed. `checkForUpdateAsync` REJECTS — rather than
+   * resolving `isAvailable: false` — when the server answers with anything but
+   * a manifest: a 404, a Frappe error page, a site without `upande_sensors`'
+   * OTA endpoint deployed yet. None of that is the user's problem, and none of
+   * it is allowed to surface past a `__DEV__` console line.
+   *
+   * Never in development or Expo Go: `Updates.isEnabled` is false there, and a
+   * Metro reload is the update mechanism.
+   */
+  const checkOta = useCallback(
+    async ({ force = false } = {}) => {
+      if (IS_DEV || !Updates.isEnabled) return;
+      if (otaBusy.current || otaApplied.current) return;
+      if (!force && Date.now() - otaLastCheck.current < OTA_CHECK_INTERVAL_MS) return;
+      otaBusy.current = true;
+      otaLastCheck.current = Date.now();
+      setOtaChecking(true);
+      try {
+        const found = await Updates.checkForUpdateAsync();
+        if (!found?.isAvailable) return;
+        await Updates.fetchUpdateAsync();
+        await applyOta();
+      } catch (err) {
+        if (IS_DEV) console.log('[ota] check', err?.message);
+      } finally {
+        otaBusy.current = false;
+        setOtaChecking(false);
+      }
+    },
+    [applyOta],
+  );
+
+  // Once at mount, then on every return to the foreground — a phone that stays
+  // open all day on the Live screen should still pick up a fix published at
+  // lunchtime. The interval guard keeps a screen-on/screen-off habit from
+  // turning into a request per unlock.
+  useEffect(() => {
+    checkOta({ force: true });
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') checkOta();
+    });
+    return () => sub.remove();
+  }, [checkOta]);
+
+  /**
+   * The native side's own download, from `checkAutomatically: ON_LOAD`.
+   *
+   * With that setting expo-updates checks and downloads at startup on its own,
+   * but does not restart into the result until the NEXT launch — so without
+   * this a fix would always be one launch behind. `isUpdatePending` flips when
+   * that download completes, and the bundle is applied the same way as one this
+   * hook fetched itself.
+   */
+  const { isUpdatePending } = Updates.useUpdates();
+  useEffect(() => {
+    if (IS_DEV || !Updates.isEnabled || !isUpdatePending) return;
+    applyOta();
+  }, [isUpdatePending, applyOta]);
+
+  /* ── APK: the GitHub Releases check ───────────────────────────────────── */
 
   // One silent attempt per launch. `autoCheckForUpdate` throttles to once a day
   // across launches and swallows its own failures, so a phone that opens the
@@ -287,8 +417,10 @@ export function UpdateProvider({ children }) {
       progress,
       installError,
       install,
+      otaChecking,
+      otaReady,
     }),
-    [update, checking, error, check, downloading, progress, installError, install],
+    [update, checking, error, check, downloading, progress, installError, install, otaChecking, otaReady],
   );
 
   return <UpdateContext.Provider value={value}>{children}</UpdateContext.Provider>;
@@ -310,6 +442,8 @@ export function useUpdate() {
       progress: null,
       installError: null,
       install: async () => false,
+      otaChecking: false,
+      otaReady: false,
     }
   );
 }

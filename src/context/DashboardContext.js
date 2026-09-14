@@ -15,6 +15,7 @@ import { getDashboardConfig, getServerTimezone, getUserSites } from '../api/endp
 import { fetchLiveForSite, latestStamp } from '../api/liveSite';
 import { useQuery } from '../hooks/useQuery';
 import { goToDashboard } from '../navigation/ref';
+import { setStaleAfterMinutes } from '../utils/dates';
 import { recordRoute } from '../utils/routeHistory';
 import {
   deviceOffsetMinutes,
@@ -23,6 +24,9 @@ import {
   offsetFromZoneName,
   setTimezoneState,
 } from '../utils/timezone';
+
+/** Stable empty, so a config without an `app` block does not re-memo on every render. */
+const NO_APP_SETTINGS = {};
 
 const KEY_SITE = 'upande.site';
 
@@ -124,6 +128,36 @@ export function DashboardProvider({ children }) {
     },
     [unitsByType],
   );
+
+  /**
+   * The app-facing block of Sensor Settings: `welcome_message`,
+   * `support_contact`, `stale_after_minutes`. Only the app method returns it;
+   * the Server Script and legacy paths predate the fields, so an empty object
+   * here means "an older server", and every reader treats absence as default.
+   */
+  const appSettings = useMemo(
+    () =>
+      configQuery.data?.app && typeof configQuery.data.app === 'object'
+        ? configQuery.data.app
+        : NO_APP_SETTINGS,
+    [configQuery.data],
+  );
+
+  /**
+   * Apply the site's freshness window as soon as the config lands.
+   *
+   * Written into `utils/dates.js` rather than threaded through props because
+   * `isStale` is called from the Live cards, the header tallies, the Readings
+   * table and the Home card, and each of those would otherwise need the value
+   * passed in by hand. The setter does the validation: anything that is not a
+   * positive finite number — including the absence of the block on an older
+   * server — resets to the compiled default, so switching servers can never
+   * carry one site's threshold onto another.
+   */
+  useEffect(() => {
+    if (configQuery.loading) return;
+    setStaleAfterMinutes(appSettings.stale_after_minutes);
+  }, [appSettings, configQuery.loading]);
 
   /**
    * Live sensor tallies, published by the Live screen so the header can show
@@ -425,6 +459,11 @@ export function DashboardProvider({ children }) {
       configLoading: configQuery.loading,
       configError: configQuery.error,
       dashboardTitle: configQuery.data?.title || 'Upande Sensors',
+      appSettings,
+      // Trimmed here so a field left as whitespace in Sensor Settings reads as
+      // unset everywhere, rather than rendering a blank line on Home.
+      welcomeMessage: String(appSettings.welcome_message || '').trim() || null,
+      supportContact: String(appSettings.support_contact || '').trim() || null,
 
       sensorType,
       setSensorType,
@@ -456,6 +495,7 @@ export function DashboardProvider({ children }) {
       configQuery.loading,
       configQuery.error,
       configQuery.data,
+      appSettings,
       sensorType,
       sensorTypesForTab,
       unitForType,

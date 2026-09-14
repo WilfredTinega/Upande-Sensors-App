@@ -324,13 +324,20 @@ export function setRouteHistoryEnabled(next, user) {
   appStateSub?.remove();
   appStateSub = null;
   /**
-   * The queue is kept, not cleared.
+   * The queue is dropped, on disk as well as in memory.
    *
-   * These visits belong to the account that made them and the server attributes
-   * them from the session, so anything unsent at sign-out is written to disk and
-   * goes out on the next sign-in. Clearing here was a silent hole: every visit
-   * made between the last successful send and logging out simply vanished.
+   * It used to be kept so that anything unsent at sign-out went out on the next
+   * sign-in. But the server attributes every row to the session that *sends*
+   * it, not to the one that made it — so a leftover queue was written under
+   * whichever account signed in next. That was tolerable while every account
+   * was recorded; it is not once the Administrator is exempt: an Administrator's
+   * visits must never surface under a later user, and another user's must never
+   * be flushed under the Administrator (where the server would refuse them and
+   * the retry loop would spin on rows that can never be written). `signOut`
+   * flushes before it gets here, so what is dropped is only what could not be
+   * sent while the session that owned it was still alive.
    */
+  pending = [];
   persist();
 }
 

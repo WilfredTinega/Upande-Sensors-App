@@ -112,6 +112,36 @@ export function deltaT(tempC, rhPct) {
 }
 
 /**
+ * Cold rooms and cold chains do not get the derived pair.
+ *
+ * Dew point and ΔT are a condensation-risk pair: in a greenhouse they answer a
+ * real question — how close is the air to wetting the crop, and how much margin
+ * is left — and a grower acts on them. In a chilled store they answer nothing.
+ * There the whole question is whether the temperature and the humidity are
+ * inside their limits, and two extra lines derived from those same two readings
+ * only crowd the chart and the tiles with numbers nobody is watching.
+ *
+ * Keyed off the tab, matching the web SPA's `TAB_TAG_BY_SLUG` in `Tab.vue`
+ * ('cold-room-monitoring' → `cold_room`, 'cold-chain-monitoring' →
+ * `cold_chain`). Hyphens, underscores and case are collapsed first, so the raw
+ * slug, the mapped tag and a hand-typed label ("Cold Room Temperature") are all
+ * recognised by the same test — the app is handed whichever of the three the
+ * server happened to send.
+ */
+const COLD_TABS = ['cold room', 'cold chain'];
+
+const collapse = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[-_]+/g, ' ');
+
+export function derivesClimate({ slug, label } = {}) {
+  const text = `${collapse(slug)} ${collapse(label)}`;
+  return !COLD_TABS.some((cold) => text.includes(cold));
+}
+
+/**
  * Append Dew Point and ΔT, computed per bucket from temperature and humidity.
  *
  * Neither is a sensor type — the server derives them the same way for its own

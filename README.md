@@ -4,6 +4,8 @@ An Android client for an ERPNext/Frappe instance running the [`upande_sensors`](
 
 It gives field and ops staff a phone-sized view of the same data the desk UI exposes:
 
+- **Home** — the selected site at a glance (live / stale / total, newest reading, recent limit
+  breaches), the dashboards grid from Sensor Settings, quick links and the support contact.
 - **Live** — latest values per sensor, grouped by site, with staleness flagged.
 - **Reading** — per-sensor rollups (min / max / average / trend) for a window.
 - **Dashboards** — time series for a sensor type over a date range, with daily/hourly bucketing.
@@ -128,16 +130,68 @@ As a backstop, any timestamp that lands more than ten minutes in the *future* is
 `clock mismatch` and treated as stale rather than fresh — so a wrong value here shows up as a
 visible anomaly instead of silent false confidence.
 
+The "stale after" window itself comes from **Sensor Settings → `stale_after_minutes`** on the
+server, applied app-wide when the config loads; the compiled default of 120 minutes is used
+when the server does not say (an older `upande_sensors`, or a blank field).
+
+## Push notifications
+
+When a reading crosses a limit configured on its monitoring, the server sends a push to every
+phone registered for that site (Android channel `alerts`). Tapping it selects the site and opens
+**Live**. The **Home** tab also lists the last 7 days' breaches for the selected site in a
+"Recent alerts" card, which works with no push setup at all — it reads the server directly.
+
+Push itself needs one-time setup that the repository does not yet carry. Until it is done the app
+runs with push disabled, **Account → Notifications** reads "Alerts not configured on this build",
+and nothing else is affected:
+
+1. **An Expo account and project.** Run `npx eas init` in the repo; it writes
+   `expo.extra.eas.projectId` into `app.json`. Expo push tokens are minted per project, so
+   without this id there is nothing to register.
+2. **A Firebase project.** Download its `google-services.json`, place it at the repo root and
+   reference it from `app.json` → `android.googleServicesFile`. Android push is FCM underneath.
+3. **The FCM V1 service-account key, uploaded to Expo** (`eas credentials`, or the Expo
+   dashboard → project → Credentials → FCM V1). Expo's push service cannot deliver to Android
+   without it.
+
+Registration happens after sign-in and on a restored session, and the token is unregistered on
+sign-out. It is skipped — and says so on the Account row — in Expo Go (which dropped remote push
+in SDK 53), in development bundles, on emulators, and against a server whose `upande_sensors`
+predates the push endpoints. Denying the permission is remembered by Android; **Turn on** on the
+Account row re-runs registration and, on a second denial, opens the system settings page.
+
+Server side, the `expo_push_access_token` key in site config is optional: Expo's push API works
+unauthenticated for ordinary volumes, and the token only raises the rate limits.
+
+## Device register
+
+The app tells the server which phones it is installed on, so **App activity → Devices** (System
+Manager only) can answer "how many devices run this, and which build is each person on".
+
+What is sent: a random install id (a UUID minted once and kept in the keystore — it survives
+sign-out and changes only on reinstall), platform, phone brand / model / device name, OS version,
+app and runtime version, whether it is a physical device, and the reason for the report. **Not**
+sent: IP, location, phone number, or any hardware or advertising id. The IP shown in the register
+is observed by the server from the request.
+
+When: on every successful sign-in (password, biometric unlock, or the stored-credential re-login
+on cold start) — that is the event that pairs an account with a device, and on a shared phone
+each person who signs in gets their own record. A cold start that walks straight back into a live
+session sends a `launch` report instead, throttled to once an hour per account. Everything is
+fire-and-forget: a server without the endpoint, no network, or a refusal changes nothing on screen.
 
 ## Project layout
 
 ```
 App.js                  root component (auth gate + navigation)
 src/api/client.js       Frappe HTTP client: login, session cookie, error typing
-src/api/endpoints.js    wrappers over the upande_sensors whitelisted methods
+src/api/endpoints.js    the app's API, tried as upande_sensors.api.mobile.* → Server Script
+                        upande_sensors_app.* → legacy call, falling through only on a
+                        missing endpoint (see server/README.md)
+src/api/push.js         push registration + notification taps (limit alerts)
 src/context/            auth state and persisted session
 src/navigation/         bottom-tab navigator
-src/screens/            Live, Readings, Dashboard, Login, Account, RouteHistory
+src/screens/            Home, Live, Readings, Dashboard, Login, Account, RouteHistory
 src/components/         chart and shared UI primitives
 src/theme.js            light + dark palettes (Account > Appearance; defaults to light)
 ```

@@ -11,6 +11,7 @@ import {
 
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { OtaToast } from './src/components/OtaToast';
 import { AuthProvider } from './src/context/AuthContext';
 import { ThemeProvider, useThemePreference } from './src/context/ThemeContext';
 import { UpdateProvider } from './src/context/UpdateContext';
@@ -57,6 +58,10 @@ export default function App() {
           <AuthProvider>
             <ThemedStatusBar />
             <RootNavigator />
+            {/* Above the whole tree, signed in or not: a JS update can finish
+                downloading on the login screen too, and the restart it
+                announces is the app's, not one screen's. */}
+            <OtaToast />
           </AuthProvider>
         </UpdateProvider>
       </ThemeProvider>
