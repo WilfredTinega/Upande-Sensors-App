@@ -1,15 +1,19 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { LineChart, formatTick } from '../components/LineChart';
-import { Card, ChoiceButtons, EmptyState, ErrorView, StatTile, StatusChip } from '../components/ui';
+import { Button, Card, ChoiceButtons, EmptyState, ErrorView, StatTile, StatusChip } from '../components/ui';
 import { Skeleton, SkeletonChart } from '../components/Skeleton';
-import { TTL_LIVE, TTL_SERIES, cacheKey, invalidate } from '../api/cache';
+import { TTL_LIVE, TTL_REFERENCE, TTL_SERIES, cacheKey, invalidate } from '../api/cache';
+import { getSensorsForLocation } from '../api/endpoints';
 import { liveKey, loadLiveForSite } from '../api/liveSite';
 import { DEFAULT_MEASURES, fetchBucketedTrend, fetchSeriesTrend } from '../api/trend';
 import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
+import { goToSensorLocation, goToSensorMap } from '../navigation/ref';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
+import { formatCoordinates, formatMetres, hasCoordinates } from '../utils/geo';
 import {
   daysAgo,
   fullTimestamp,
@@ -75,13 +79,76 @@ function lastHours(trend, hours) {
   };
 }
 
+/**
+ * Where the sensor is on the ground: coordinates and accuracy with a way to
+ * the map, or — for an account that may set them — the way to the GPS capture
+ * when it has none. One request, cached at reference TTL and invalidated by a
+ * save, so it costs a visit nothing after the first time.
+ *
+ * Renders nothing at all when there is nothing honest to say: an older server
+ * without the endpoint, a sensor the registry does not know, or a sensor with
+ * no position seen by an account that cannot set one. A row reading "No
+ * coordinates" for someone who can do nothing about it is just a reproach.
+ */
+function LocationRow({ site, sensorName, canSet }) {
+  const t = useTheme();
+  const lookup = useQuery(
+    site && sensorName ? cacheKey('sensor_location_lookup', { site, sensorName }) : null,
+    () => getSensorsForLocation({ site, search: sensorName }),
+    { ttl: TTL_REFERENCE },
+  );
+  const row = useMemo(
+    () => (Array.isArray(lookup.data?.rows) ? lookup.data.rows : []).find((r) => r.sensor_name === sensorName) || null,
+    [lookup.data, sensorName],
+  );
+
+  if (lookup.error || (lookup.data && !row)) return null;
+  if (!lookup.data) {
+    return (
+      <Card style={{ marginBottom: spacing.sm }}>
+        <Skeleton width="60%" height={14} />
+      </Card>
+    );
+  }
+  const placed = hasCoordinates(row);
+  if (!placed && !canSet) return null;
+  const accuracy = formatMetres(row.location_accuracy_m);
+
+  return (
+    <Card style={{ marginBottom: spacing.sm }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+        <Ionicons name={placed ? 'location' : 'location-outline'} size={18} color={placed ? t.accent : t.textMuted} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[type.caption, { color: t.textSecondary }]}>Location</Text>
+          <Text numberOfLines={1} style={[type.body, { color: t.textPrimary, fontVariant: ['tabular-nums'] }]}>
+            {placed
+              ? `${formatCoordinates(row.latitude, row.longitude)}${accuracy ? ` · ${accuracy}` : ''}`
+              : 'No coordinates yet'}
+          </Text>
+        </View>
+        {placed ? (
+          <Button compact tone="ghost" label="View on map" onPress={() => goToSensorMap({ focus: sensorName })} />
+        ) : null}
+        {canSet ? (
+          <Button
+            compact
+            tone={placed ? 'ghost' : 'accent'}
+            label={placed ? 'Update' : 'Set coordinates'}
+            onPress={() => goToSensorLocation({ sensor: row.name, sensorName })}
+          />
+        ) : null}
+      </View>
+    </Card>
+  );
+}
+
 export function SensorDetailScreen({ route }) {
   const t = useTheme();
   const { sensorName, sensorType } = route?.params || {};
   // The sensor's site travels in the params; the header filter is not offered
   // on this screen because a sensor belongs to exactly one site.
   const site = route?.params?.site || null;
-  const { unitForType } = useDashboard();
+  const { unitForType, appSettings } = useDashboard();
 
   const [rangeKey, setRangeKeyState] = useState(rememberedRange);
   const [focused, setFocused] = useState([]);
@@ -240,6 +307,8 @@ export function SensorDetailScreen({ route }) {
           )}
         </View>
       </Card>
+
+      <LocationRow site={site} sensorName={sensorName} canSet={Boolean(appSettings?.can_set_location)} />
 
       <ChoiceButtons
         style={{ marginBottom: spacing.sm }}

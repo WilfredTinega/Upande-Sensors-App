@@ -68,6 +68,10 @@ const NAMES = {
   assignableUsers: 'assignable_users',
   dashboardHealth: 'dashboard_health',
   floorPlans: 'floor_plans',
+  sensorsForLocation: 'sensors_for_location',
+  setSensorLocation: 'set_sensor_location',
+  sensorLocationHistory: 'sensor_location_history',
+  sensorMap: 'sensor_map',
 };
 
 /** Whitelisted methods inside the `upande_sensors` app. Tried first. */
@@ -89,8 +93,10 @@ const APP_ONLY = {
   registerPushToken: 'upande_sensors.api.mobile.register_push_token',
   unregisterPushToken: 'upande_sensors.api.mobile.unregister_push_token',
   alerts: 'upande_sensors.api.mobile.alerts',
+  alertsCount: 'upande_sensors.api.mobile.alerts_count',
   registerInstall: 'upande_sensors.api.mobile.register_install',
   installs: 'upande_sensors.api.mobile.installs',
+  locationCoverage: 'upande_sensors.api.mobile.location_coverage',
 };
 
 const LEGACY = {
@@ -834,16 +840,25 @@ export async function searchUsers(txt = '', signal) {
 /**
  * Tell the server where to send this device's limit-breach pushes.
  *
- * App method only, POST. The token is an Expo push token, and the server
- * forwards through the Expo push service — so the same row works for any
- * device that can register with Expo, and the server never holds an FCM
- * credential per device. A site without the endpoint rejects with
- * `isMissingEndpoint`, which `push.js` reads as "this server has no alerts".
+ * App method only, POST. `provider` names the service the token belongs to:
+ * `'expo'` for a token minted by Expo's push service (a build with an EAS
+ * project id), `'fcm'` for the raw Firebase registration token a build carrying
+ * `google-services.json` gets from the device — see `push.js` for how the app
+ * decides. The server keeps one row per token and sends through whichever
+ * service the row names, so a fleet can carry both kinds at once while builds
+ * roll over. A site without the endpoint rejects with `isMissingEndpoint`,
+ * which `push.js` reads as "this server has no alerts".
  */
-export function registerPushToken({ token, platform, device, appVersion }, signal) {
+export function registerPushToken({ token, platform, device, appVersion, provider }, signal) {
   return client.call(
     APP_ONLY.registerPushToken,
-    { token, platform, device: device || undefined, app_version: appVersion || undefined },
+    {
+      token,
+      platform,
+      device: device || undefined,
+      app_version: appVersion || undefined,
+      provider: provider || undefined,
+    },
     { write: true, signal },
   );
 }
@@ -854,19 +869,44 @@ export function unregisterPushToken(token, signal) {
 }
 
 /**
- * Limit breaches recorded for a site, newest first.
+ * Limit breaches, newest first.
  *
  * `{ rows: [{ name, site, sensor_name, monitoring, measure, value, unit,
- * limit_min, limit_max, direction, reading_timestamp, creation }], total }`.
- * Rethrows a missing endpoint untouched so the Home screen can hide the card
- * on a server that predates alerts, rather than show an empty one.
+ * limit_min, limit_max, direction, reading_timestamp, creation, title, body }],
+ * total }`. `title` and `body` are the exact text of the push the server sent
+ * for the row, so the list on the phone reads as the notifications did.
+ *
+ * With no `site` the server answers across every site the account may see —
+ * that is the Notifications screen's call, which is about the person, not the
+ * selected site. `since` (server-naive `YYYY-MM-DD HH:MM:SS`) narrows to rows
+ * created after that instant. Rethrows a missing endpoint untouched so the
+ * callers can hide the feature on a server that predates alerts, rather than
+ * show an empty list as an all-clear.
  */
-export function getAlerts({ site, sinceDays = 7, start = 0, pageLength = 5 } = {}, signal) {
+export function getAlerts(
+  { site = null, sinceDays = 30, start = 0, pageLength = 30, since = null } = {},
+  signal,
+) {
   return client.call(
     APP_ONLY.alerts,
-    { site, since_days: sinceDays, start, page_length: pageLength },
+    {
+      site: site || undefined,
+      since_days: sinceDays,
+      start,
+      page_length: pageLength,
+      since: since || undefined,
+    },
     { signal },
   );
+}
+
+/**
+ * How many breaches the account may see that were created after `since` —
+ * the number on the header bell's badge. Same scope as `getAlerts` with no
+ * site. Resolves `{ count }`.
+ */
+export function getAlertsCount({ since = null } = {}, signal) {
+  return client.call(APP_ONLY.alertsCount, { since: since || undefined }, { signal });
 }
 
 /* ── Device register ─────────────────────────────────────────────────────── */
@@ -1000,6 +1040,120 @@ export function getFloorPlans({ site, plan = null, doorHours = 24 } = {}, signal
   return viaChain(
     appThenScript('floorPlans', { site, plan: plan || undefined, door_hours: doorHours }, { signal }),
   );
+}
+
+/* ── Sensor coordinates and the map ──────────────────────────────────────── */
+
+/**
+ * The sensors a phone may set coordinates on, with what each already has.
+ *
+ * `{ rows: [{ name, sensor_name, sensor_site, sensor_type, monitoring,
+ * latitude, longitude, location_accuracy_m, location_samples,
+ * location_updated_on, location_updated_by, has_location }], total }`. `name`
+ * is the Sensor DOCNAME, which is what `setSensorLocation` wants; `sensor_name`
+ * is the label the rest of the app deals in. `has_location` is false for 0,0
+ * as well as null — an untouched Float pair, not a sensor at sea.
+ *
+ * `search` narrows by sensor name on the server, for Sensor detail's lookup of
+ * one row. The location_* fields are null on a site whose upande_sensors
+ * predates them; the screens show "unknown" for those, not zeros.
+ */
+export function getSensorsForLocation({ site, search } = {}, signal) {
+  return viaChain(
+    appThenScript(
+      'sensorsForLocation',
+      { site: site || undefined, search: search || undefined },
+      { signal },
+    ),
+  );
+}
+
+/**
+ * Write a sensor's coordinates from the phone. POST — a write over GET is
+ * rolled back by Frappe and would report success having changed nothing.
+ *
+ * Sends the averaged position, the weighted accuracy in metres, how many
+ * fixes it came from and the phone model, so the row on the server carries
+ * its own error bar and provenance. The server refuses 0,0 and out-of-range
+ * values with a sentence, and refuses any account that is not a System
+ * Manager with a permission error — `config().app.can_set_location` is what
+ * hides the button; this is what makes hiding it enough. Resolves to the
+ * updated `getSensorsForLocation` row plus `history_name` and `previous`.
+ */
+export function setSensorLocation(
+  { sensor, latitude, longitude, accuracyM, samples, device },
+  signal,
+) {
+  return viaChain(
+    appThenScript(
+      'setSensorLocation',
+      {
+        sensor,
+        latitude,
+        longitude,
+        accuracy_m: Number.isFinite(Number(accuracyM)) ? accuracyM : undefined,
+        samples: samples || undefined,
+        device: device || undefined,
+      },
+      { write: true, signal },
+    ),
+  );
+}
+
+/**
+ * Every position one sensor has been given, newest first: `{ rows: [{
+ * latitude, longitude, accuracy_m, samples, source, device, user,
+ * recorded_at, previous_latitude, previous_longitude }], total, supported }`.
+ * `supported` is false on a server without the history doctype, and the
+ * screen leaves the section out there rather than saying "no history".
+ */
+export function getSensorLocationHistory({ sensor, start = 0, pageLength = 20 }, signal) {
+  return viaChain(
+    appThenScript(
+      'sensorLocationHistory',
+      { sensor, start, page_length: pageLength },
+      { signal },
+    ),
+  );
+}
+
+/**
+ * Everything the Sensor Map draws, in one request: `{ stale_minutes, sensors:
+ * [{ name, sensor_name, sensor_site, sensor_type, monitoring, latitude,
+ * longitude, location_accuracy_m, last_reading, online, values: { <type>: {
+ * value, unit, ts } } }], center: { latitude, longitude } | null, map: {
+ * mapbox_token } }`.
+ *
+ * Only sensors WITH coordinates. `online` follows the same stale window the
+ * Home tiles use, so the dot on the map and the count on Home agree; a sensor
+ * with `last_reading` null has never reported in the lookback and is drawn
+ * grey, not red. `mapbox_token` is Sensor Settings' key, so the phone shows the
+ * website's basemap when the site has one and OpenStreetMap when it has not.
+ * With no `site`, every site the account may see. A missing endpoint is
+ * rethrown untouched so the screen can say "needs a newer server".
+ */
+export function getSensorMap({ site, staleMinutes } = {}, signal) {
+  return viaChain(
+    appThenScript(
+      'sensorMap',
+      { site: site || undefined, stale_minutes: staleMinutes || undefined },
+      { signal },
+    ),
+  );
+}
+
+/**
+ * How many of this account's sensors have coordinates: `{ total,
+ * with_coordinates, without_coordinates }`. Registry-only (no readings), for
+ * the Home screen's Sensor list tile.
+ *
+ * App method only — there is no Server Script link in the chain, so this
+ * rethrows `isMissingEndpoint` untouched and the tile hides the coordinate
+ * counts on a server that predates it, the same as `getDashboardHealth` did
+ * before it grew a script fallback.
+ */
+export function getLocationCoverage(site, signal) {
+  return client.call(APP_ONLY.locationCoverage, { site: site || undefined }, { signal });
 }
 
 /* ── Account names ───────────────────────────────────────────────────────── */

@@ -693,13 +693,18 @@ export function FloorPlanScreen() {
     setPlanName(site ? rememberedPlan.get(site) || null : null);
   }, [site]);
 
-  const key = site ? cacheKey('floor_plan', { site, plan: planName || '' }) : null;
+  // Gated on `sitePending`, not `site`: `site === null` once settled means
+  // "All sites" — the endpoint already answers that with the first plan it
+  // can find across every permitted site, which is what "no site chosen"
+  // behaved like before "All sites" was reachable from the picker at all.
+  const key = sitePending ? null : cacheKey('floor_plan', { site, plan: planName || '' });
   const query = useQuery(key, () => getFloorPlans({ site, plan: planName, doorHours: DOOR_HOURS }), {
     ttl: TTL_LIVE,
     // Live values on a wall plan go stale in a minute; off-screen they are not
     // worth the request, so the poll follows focus.
     pollMs: isFocused ? POLL_MS : 0,
   });
+
 
   const data = query.data;
   const plans = useMemo(() => (Array.isArray(data?.plans) ? data.plans : []), [data]);
@@ -818,7 +823,10 @@ export function FloorPlanScreen() {
       ) : query.error ? (
         <ErrorView error={query.error} onRetry={refresh} />
       ) : !plans.length || !plan ? (
-        <EmptyState title="No floor plans for this site" message={`Nothing has been drawn for ${site || 'this site'} yet.`} />
+        <EmptyState
+          title="No floor plans for this site"
+          message={`Nothing has been drawn for ${site || 'this site'} yet.`}
+        />
       ) : !blueprint ? (
         <EmptyState title="This plan has no blueprint yet — add one on the website" message={plan.plan_name || plan.name} />
       ) : (

@@ -3,6 +3,7 @@ import { Alert, Linking, Pressable, ScrollView, Switch, Text, View } from 'react
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import {
+  PUSH_PROVIDER,
   PUSH_STATUS,
   getPushState,
   openNotificationSettings,
@@ -127,11 +128,25 @@ export function SettingsScreen() {
   const pushLine = useMemo(() => {
     switch (push.status) {
       case PUSH_STATUS.ON:
-        return { label: 'Alerts on', detail: 'Limit breaches are pushed to this phone.', tone: 'good' };
+        return {
+          label: 'Alerts on',
+          // Named, because the two routes fail differently: a push that never
+          // arrives on a Firebase build is a server-key problem, on an Expo
+          // build an EAS-credentials one, and the row is where that is read.
+          detail:
+            push.provider === PUSH_PROVIDER.EXPO
+              ? 'Limit breaches are pushed to this phone via Expo.'
+              : 'Limit breaches are pushed to this phone via Firebase.',
+          tone: 'good',
+        };
       case PUSH_STATUS.DENIED:
         return { label: 'Alerts off (permission denied)', detail: 'Notifications are blocked for this app.', tone: 'warning' };
       case PUSH_STATUS.UNCONFIGURED:
-        return { label: 'Alerts not configured on this build', detail: 'No Expo project id — see README → Push notifications.', tone: null };
+        return {
+          label: 'Alerts need Firebase on this build',
+          detail: 'Add google-services.json and ship a new APK (see README → Push notifications).',
+          tone: null,
+        };
       case PUSH_STATUS.UNAVAILABLE:
         return { label: 'Alerts not available on this server', detail: 'The server is older than the app.', tone: null };
       case PUSH_STATUS.EXPO_GO:
@@ -428,7 +443,13 @@ export function SettingsScreen() {
           </View>
           {pushLine.tone ? <StatusChip tone={pushLine.tone} label={pushLine.tone === 'good' ? 'On' : 'Off'} /> : null}
         </View>
-        {push.status === PUSH_STATUS.DENIED || push.status === PUSH_STATUS.FAILED ? (
+        {/* Offered on `unconfigured` too: it re-runs the whole registration,
+            so a build that gained Firebase through an OTA-updated config, or a
+            phone whose Firebase init raced the first attempt, gets a second
+            look without a restart. */}
+        {push.status === PUSH_STATUS.DENIED ||
+        push.status === PUSH_STATUS.FAILED ||
+        push.status === PUSH_STATUS.UNCONFIGURED ? (
           <Button
             label="Turn on"
             tone="ghost"

@@ -405,6 +405,15 @@ export function DashboardProvider({ children }) {
     [applyTimezone],
   );
 
+  /**
+   * `null` means "All sites" — a deliberate, explicit choice, never the
+   * default. It is not written to SecureStore (only a real site name is), so
+   * the NEXT launch auto-picks one site again rather than reopening on the
+   * broad view somebody happened to leave it on — "All sites" is a
+   * for-this-session look, not a standing preference. The last REAL site is
+   * left alone, not cleared, so a detour through "All sites" and back still
+   * remembers where you actually were.
+   */
   const setSite = useCallback((next) => {
     setSiteState(next);
     if (next) SecureStore.setItemAsync(KEY_SITE, next).catch(() => {});
@@ -443,9 +452,11 @@ export function DashboardProvider({ children }) {
       sites,
       site: activeSite,
       setSite,
-      // No site yet means the auto-pick is still running. Filters stay frozen
-      // until then: a tap now would race the pick and could be overwritten.
-      filtersLocked: sitesQuery.loading || !activeSite,
+      // Gated on `sitePending`, not on `site` being truthy: `site === null`
+      // now means two different things depending on when you ask — "still
+      // auto-picking" before the pick settles, and "All sites, on purpose"
+      // after it. Only the first one should freeze the filters.
+      filtersLocked: sitesQuery.loading || sitePending,
       sitesLoading: sitesQuery.loading,
       // Sites listed but not yet chosen between. Screens skeleton on this.
       sitePending: sitePending || sitesQuery.loading,

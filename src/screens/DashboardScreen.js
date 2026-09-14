@@ -175,12 +175,16 @@ export function DashboardScreen() {
    * Both use the keys the sign-in probe fills, so a site chosen at login
    * renders from cache instead of refetching what was just fetched.
    */
-  const sensorList = useQuery(site ? sensorsKey(site) : null, () => loadSiteSensors(site), {
+  // Gated on `sitePending`, not on `site` itself: `site === null` after the
+  // pick has settled means "All sites" on purpose, and the API already treats
+  // a blank site as "everything I may see" — only the moment BEFORE a site
+  // has been decided at all should hold these queries back.
+  const sensorList = useQuery(sitePending ? null : sensorsKey(site), () => loadSiteSensors(site), {
     ttl: TTL_REFERENCE,
   });
 
   const values = useQuery(
-    site && sensorList.data?.length ? valuesKey(site) : null,
+    !sitePending && sensorList.data?.length ? valuesKey(site) : null,
     () => loadLiveValues(site, sensorList.data),
     { ttl: TTL_LIVE },
   );

@@ -54,6 +54,22 @@ function formatTick(value) {
 }
 
 /**
+ * A `"YYYY-MM-DD HH:MM"` label as minutes since an arbitrary fixed epoch, or
+ * `null` when the label carries no time of day (a date-only bucket, or
+ * anything unparseable). Monotonic across day boundaries — a multi-day hourly
+ * chart needs that to align ticks correctly past midnight — and deliberately
+ * NOT a real instant: this only ever compares one label's minute count against
+ * another's from the same axis, never against the device clock, so there is no
+ * timezone to get wrong.
+ */
+function absoluteMinutes(label) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(label || ''));
+  if (!m) return null;
+  const days = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 86400000;
+  return days * 1440 + Number(m[4]) * 60 + Number(m[5]);
+}
+
+/**
  * Time-series line chart, one or more series sharing an x-axis.
  *
  * **One y-axis, always.** Series with different units (temperature in °C beside
@@ -167,14 +183,93 @@ export function LineChart({
    * horizontal room rather than its full width, which is what lets more than
    * three fit. Still capped: a label per bucket would be a grey smear at 72
    * buckets.
+   *
+   * On an intraday chart (every label carries a real time, not just a date)
+   * the ticks shown are snapped to the 30-minute grid — "08:00, 08:30, 09:00"
+   * rather than an index stride that can land on an odd minute like "08:47"
+   * purely because that happened to be every Nth bucket. The STEP between
+   * shown ticks is always a whole multiple of 30 minutes too, widening as far
+   * as it needs to for the label budget on a multi-day hourly chart, so a
+   * 3-day view still reads as round times rather than crowding in forty-eight
+   * of them. A date-only axis (weekly/daily buckets over a wide range) has no
+   * time-of-day to align to and falls straight back to the plain index stride.
    */
   const xLabelIndices = useMemo(() => {
     if (count <= 1) return [0];
-    const maxLabels = Math.max(2, Math.min(8, Math.floor(plotW / 64)));
+
+    const marks = labels.map(absoluteMinutes);
+    const intraday = count > 0 && marks.every((m) => m !== null);
+    /**
+     * The per-label pixel budget, and how many can fit before crowding.
+     *
+     * A date-only tick ("2026-09-10") is drawn in full and needs the wider
+     * 64px estimate this always used. An intraday tick is drawn as bare
+     * "HH:MM" (see the render loop below — the date is dropped from the AXIS
+     * text, not from the tooltip, which still shows the full instant on
+     * touch), so it earns a narrower budget and a higher ceiling: the same
+     * phone width that only fit 4 full-date labels comfortably fits 8-10
+     * short ones, which is the difference between an axis that looks like it
+     * has four data points and one that looks like the chart it actually is.
+     */
+    const maxLabels = intraday
+      ? Math.max(2, Math.min(10, Math.floor(plotW / 34)))
+      : Math.max(2, Math.min(8, Math.floor(plotW / 64)));
+    if (intraday) {
+      const onHalfHour = [];
+      for (let i = 0; i < count; i += 1) {
+        if (marks[i] % 30 === 0) onHalfHour.push(i);
+      }
+      if (onHalfHour.length) {
+        const span = marks[onHalfHour[onHalfHour.length - 1]] - marks[onHalfHour[0]];
+        const stepMin =
+          onHalfHour.length <= maxLabels
+            ? 30
+            : Math.max(30, Math.ceil(span / (maxLabels - 1) / 30) * 30);
+        const chosen = [];
+        let nextMark = marks[onHalfHour[0]];
+        onHalfHour.forEach((idx) => {
+          if (marks[idx] >= nextMark) {
+            chosen.push(idx);
+            nextMark = marks[idx] + stepMin;
+          }
+        });
+        return chosen;
+      }
+    }
+
     if (count <= maxLabels) return Array.from({ length: count }, (_, i) => i);
     const step = (count - 1) / (maxLabels - 1);
     return Array.from({ length: maxLabels }, (_, k) => Math.round(k * step));
-  }, [count, plotW]);
+  }, [count, plotW, labels]);
+
+  /**
+   * What each shown tick actually prints — computed once per tick set, not
+   * per-label in isolation, because the one thing a bare "HH:MM" axis cannot
+   * say on its own is WHICH day: a 3-day chart's ticks wrap past midnight
+   * more than once, and "03:00" with nothing else is two different instants
+   * a day apart. So the date is added back in, but only on the tick where it
+   * actually changes from the one before it — the same convention a
+   * day-crossing agenda or a long chat thread uses, rather than repeating a
+   * date every tick already carries the previous tick's context for.
+   */
+  const tickTexts = useMemo(() => {
+    let lastDate = null;
+    return xLabelIndices.map((i) => {
+      const raw = String(labels[i] || '');
+      if (absoluteMinutes(raw) === null) return raw; // date-only bucket: unchanged
+      const date = raw.slice(0, 10);
+      const time = raw.slice(11, 16);
+      const changed = date !== lastDate;
+      lastDate = date;
+      // "10 Sep" rather than the full "2026-09-10": the year is not in
+      // question on a chart that never spans one, and the shorter form keeps
+      // the day-change tick from crowding its neighbours.
+      if (!changed) return time;
+      const [, mo, da] = date.split('-');
+      const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      return `${time} · ${da} ${MONTHS[Number(mo) - 1]}`;
+    });
+  }, [xLabelIndices, labels]);
 
   if (!allFinite.length) {
     return (
@@ -297,7 +392,7 @@ export function LineChart({
               />
             ))}
 
-            {xLabelIndices.map((i) => {
+            {xLabelIndices.map((i, k) => {
               const x = xAt(i);
               const y = height - PAD.bottom + 15;
               return (
@@ -313,7 +408,7 @@ export function LineChart({
                   textAnchor="end"
                   transform={`rotate(-30, ${x}, ${y})`}
                 >
-                  {labels[i]}
+                  {tickTexts[k]}
                 </SvgText>
               );
             })}

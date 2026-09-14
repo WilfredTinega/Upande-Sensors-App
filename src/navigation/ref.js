@@ -35,9 +35,10 @@ export function goToHome() {
 }
 
 /**
- * Live readings for the selected site. Also the destination of a tapped
- * limit-breach notification, which is why it has to be reachable from outside
- * the navigator: the tap handler lives in the push module, not in a screen.
+ * Live readings for the selected site. Also where a row on the Notifications
+ * list lands, after selecting the row's site — reachable from outside the
+ * navigator because that list is opened by the push tap handler, which lives
+ * in the push module, not in a screen.
  */
 export function goToLive() {
   if (navigationRef.isReady()) navigationRef.navigate(LIVE_ROUTE);
@@ -89,4 +90,94 @@ export function useCurrentRoute() {
     return () => listeners.delete(setRoute);
   }, []);
   return route;
+}
+
+/* ── Notifications, and the way back from it ─────────────────────────────── */
+
+export const NOTIFICATIONS_ROUTE = 'Notifications';
+
+/**
+ * Where the bell was pressed from, so its back chevron returns THERE.
+ *
+ * A hidden tab has no history of its own: the tab navigator's `goBack` walks
+ * to the first route, which would send someone who opened the list from
+ * Account back to Home. Remembering the departure route is the whole of the
+ * fix. Home is the fallback — for a push tap on a cold start, there is no
+ * departure route, and Home is where the app would have landed anyway.
+ */
+let notificationsReturnRoute = HOME_ROUTE;
+
+/**
+ * The full list of limit alerts. Opened by the header bell on every screen
+ * and by a tapped push, which is why it is reachable from outside the
+ * navigator like `goToLive`.
+ */
+export function goToNotifications() {
+  if (!navigationRef.isReady()) return;
+  if (currentRoute && currentRoute !== NOTIFICATIONS_ROUTE) notificationsReturnRoute = currentRoute;
+  navigationRef.navigate(NOTIFICATIONS_ROUTE);
+}
+
+/** The Notifications header's back chevron. */
+export function leaveNotifications() {
+  if (!navigationRef.isReady()) return;
+  navigationRef.navigate(notificationsReturnRoute || HOME_ROUTE);
+}
+
+/* ── Sensor coordinates and the map ──────────────────────────────────────── */
+
+export const SENSOR_LOCATION_ROUTE = 'SensorLocation';
+export const SENSOR_MAP_ROUTE = 'SensorMap';
+
+/**
+ * Departure routes for the two location tabs, by route name — the same
+ * problem Notifications solves above, for two screens that also open each
+ * other. Home is the fallback for the same reason.
+ *
+ * One extra rule: opening X from Y when Y was itself opened from X leaves X's
+ * departure alone. Otherwise map → "Set coordinates" → "View on map" → back
+ * would bounce between the two for ever; with it, the pair unwinds to wherever
+ * it was entered from.
+ */
+const returnRoutes = {};
+
+function openHidden(route, params) {
+  if (!navigationRef.isReady()) return;
+  if (currentRoute && currentRoute !== route && returnRoutes[currentRoute] !== route) {
+    returnRoutes[route] = currentRoute;
+  }
+  navigationRef.navigate(route, params);
+}
+
+function leaveHidden(route) {
+  if (!navigationRef.isReady()) return;
+  navigationRef.navigate(returnRoutes[route] || HOME_ROUTE);
+}
+
+/**
+ * The GPS capture for one sensor's coordinates. `sensor` is the Sensor
+ * docname, `sensorName` the label — either preselects; neither opens the
+ * picker empty. Params are always an object, never undefined: a tab screen
+ * keeps its last params, and a stale preselection would otherwise survive
+ * into the next visit.
+ */
+export function goToSensorLocation({ sensor, sensorName } = {}) {
+  openHidden(SENSOR_LOCATION_ROUTE, { sensor: sensor || null, sensorName: sensorName || null });
+}
+
+export function leaveSensorLocation() {
+  leaveHidden(SENSOR_LOCATION_ROUTE);
+}
+
+/**
+ * Every positioned sensor on a map. `focus` names a sensor whose popup opens
+ * on arrival — the way a "View on map" button lands on the sensor it was
+ * pressed beside rather than on the whole site.
+ */
+export function goToSensorMap({ focus } = {}) {
+  openHidden(SENSOR_MAP_ROUTE, { focus: focus || null });
+}
+
+export function leaveSensorMap() {
+  leaveHidden(SENSOR_MAP_ROUTE);
 }

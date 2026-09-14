@@ -137,31 +137,51 @@ when the server does not say (an older `upande_sensors`, or a blank field).
 ## Push notifications
 
 When a reading crosses a limit configured on its monitoring, the server sends a push to every
-phone registered for that site (Android channel `alerts`). Tapping it selects the site and opens
-**Live**. The **Home** tab also lists the last 7 days' breaches for the selected site in a
-"Recent alerts" card, which works with no push setup at all — it reads the server directly.
+phone registered for that site (Android channel `alerts`). Tapping it opens **Notifications** —
+the bell at the top right of every screen — which lists every breach across the sites the
+account may see, newest first, grouped by day; the bell carries a count of the ones raised since
+the list was last opened. Tapping a row selects that site and opens **Live**. The list works with
+no push setup at all — it reads the server directly — push is what makes the phone buzz.
 
-Push itself needs one-time setup that the repository does not yet carry. Until it is done the app
-runs with push disabled, **Account → Notifications** reads "Alerts not configured on this build",
-and nothing else is affected:
+### Firebase (the default)
 
-1. **An Expo account and project.** Run `npx eas init` in the repo; it writes
-   `expo.extra.eas.projectId` into `app.json`. Expo push tokens are minted per project, so
-   without this id there is nothing to register.
-2. **A Firebase project.** Download its `google-services.json`, place it at the repo root and
-   reference it from `app.json` → `android.googleServicesFile`. Android push is FCM underneath.
-3. **The FCM V1 service-account key, uploaded to Expo** (`eas credentials`, or the Expo
-   dashboard → project → Credentials → FCM V1). Expo's push service cannot deliver to Android
-   without it.
+Android push is Firebase Cloud Messaging. The app asks Firebase for the device's registration
+token and hands it to the server (`provider: 'fcm'`), which sends through the FCM v1 API with a
+service-account key. Nothing else is in the loop — no Expo account, no EAS project. One-time
+setup, none of which the repository carries yet:
 
-Registration happens after sign-in and on a restored session, and the token is unregistered on
-sign-out. It is skipped — and says so on the Account row — in Expo Go (which dropped remote push
-in SDK 53), in development bundles, on emulators, and against a server whose `upande_sensors`
-predates the push endpoints. Denying the permission is remembered by Android; **Turn on** on the
+1. **A Firebase project** at <https://console.firebase.google.com>. Add an **Android app** with
+   package name `com.upande.sensors` (the `android.package` in `app.json`; it must match exactly
+   or the token is minted for a different app).
+2. **`google-services.json`**, downloaded from that Android app's settings, placed at the repo
+   root. It is safe to commit — it holds project identifiers, not secrets — and CI needs it to
+   build, so do commit it.
+3. **`app.json`** → `android.googleServicesFile: "./google-services.json"`. Deliberately NOT set
+   until the file exists: `expo prebuild` copies the file and aborts when it is missing, so the
+   key and the file have to land together.
+4. **A new APK.** Firebase initialises from the file at build time; no OTA update can add it.
+5. **Server side**, the project's service-account key, so the server can send — the backend
+   README covers where it goes.
+
+Until 2–4 are done the app runs with push disabled and **Account → Notifications** reads "Alerts
+need Firebase on this build"; nothing else is affected. Once the APK ships, the same row reads
+"Alerts on … via Firebase".
+
+### Expo push (optional)
+
+If `expo.extra.eas.projectId` is present in `app.json` (written by `npx eas init`), the app
+registers an Expo push token instead (`provider: 'expo'`) and the server relays through Expo's
+push service. That route still needs the Firebase steps above AND the FCM V1 service-account key
+uploaded to the EAS project (`eas credentials`) — it is the longer path, kept for a project that
+already has an EAS account. Without a project id it is never attempted.
+
+### Where push cannot work
+
+Not in **Expo Go**: remote push was removed from it in SDK 53, and the Account row says so. Not
+in a development bundle, and not on an emulator without Google Play services. Push needs a built
+APK on a real phone. Registration happens after sign-in and on a restored session, and the token
+is unregistered on sign-out. Denying the permission is remembered by Android; **Turn on** on the
 Account row re-runs registration and, on a second denial, opens the system settings page.
-
-Server side, the `expo_push_access_token` key in site config is optional: Expo's push API works
-unauthenticated for ordinary volumes, and the token only raises the rate limits.
 
 ## Device register
 
@@ -180,6 +200,56 @@ each person who signs in gets their own record. A cold start that walks straight
 session sends a `launch` report instead, throttled to once an hour per account. Everything is
 fire-and-forget: a server without the endpoint, no network, or a refusal changes nothing on screen.
 
+## Sensor coordinates and map
+
+Two screens, both reached from **Home → quick links** and from a sensor's detail screen; neither
+has a tab of its own.
+
+**Set coordinates** (`Set coordinates` on Home, shown only to accounts that may use it) places a
+sensor from the phone standing next to it. Pick the sensor — rows that already have a position
+read "set · ±4 m · 2026-09-12" — and **Scan**. The phone asks for location permission (denied
+once: the screen says so and offers **Open settings**), then watches the GPS for up to 30 seconds
+or until **Stop**, collecting a fix a second. While it runs the ring shows the time left and the
+number inside it is the latest fix's accuracy as a percentage: **±3 m = 100 %, ±50 m = 0 %**,
+linear between (the scale is printed on the screen). The fixes are averaged with each weighted by
+1/accuracy², so a sharp fix counts for more than a vague one, and the reported accuracy is the
+weighted mean of the fixes' accuracies. **Save coordinates** writes the average, its accuracy,
+the fix count and the phone model; a sensor that already has a position gets **Update
+coordinates** and a confirmation showing old vs new and the distance between them. The saved row
+appears with **View on map**.
+
+*Satellite count is not shown.* Expo's location API reports position and accuracy but not how
+many satellites are in view — that is Android's `GnssStatus`, which needs a native module the
+project does not carry. It can be added later; the screen shows GPS accuracy and the fix count
+instead, and does not invent a number. On an emulator the position is whatever the emulator is set
+to, and the screen says so.
+
+**Sensor list** draws every sensor at the selected site that has coordinates: green when its
+newest reading is inside the site's stale window, red when it has gone quiet, grey when it has
+never reported in the lookback; the legend carries the three counts. Tapping a marker shows the
+site, each measure's latest value, the last reading time and an **Open** button to the sensor's
+own screen. The map re-asks every minute while it is on screen; the header's refresh icon asks
+now (the pull gesture is the map's pan). With no positioned sensor it says so, with a button to
+the coordinates page for accounts that may set them.
+
+The map is Leaflet in a WebView. Tiles are **OpenStreetMap** with no key, or **Mapbox streets**
+when Sensor Settings → Mapbox Access Token is set — the website's basemap, so phone and desk show
+the same ground. Leaflet itself is loaded from unpkg, so the map needs the internet, which the app
+needs anyway.
+
+**Permissions.** Reading the map and a sensor's coordinates follows the site scoping every other
+screen uses. *Setting* coordinates needs the **System Manager** role — nothing else, not even a
+Sensor Site or Sensor grant narrows it further; the server refuses anyone else and the app hides
+the buttons for them (`config().app.can_set_location`). The server also refuses 0,0 and
+out-of-range values, and keeps every previous position in **Sensor Location History** with who set
+it and from which phone.
+
+**A new APK.** Two native modules arrived with this: `expo-location` (the GPS) and
+`react-native-webview` (the map). Both work in Expo Go, but a built APK from before them cannot
+receive them over the air — `docs/OTA.md` explains why — so the next release is a full build.
+`app.json` carries the `expo-location` plugin with the Android permission text and the
+`ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION` permissions; background location is off.
+
 ## Project layout
 
 ```
@@ -188,11 +258,15 @@ src/api/client.js       Frappe HTTP client: login, session cookie, error typing
 src/api/endpoints.js    the app's API, tried as upande_sensors.api.mobile.* → Server Script
                         upande_sensors_app.* → legacy call, falling through only on a
                         missing endpoint (see server/README.md)
-src/api/push.js         push registration + notification taps (limit alerts)
-src/context/            auth state and persisted session
+src/api/push.js         push registration (FCM or Expo) + notification taps (limit alerts)
+src/context/            auth state and persisted session; site + tab selection; the
+                        alerts bell's unread count and read cursor
 src/navigation/         bottom-tab navigator
-src/screens/            Home, Live, Readings, Dashboard, Login, Account, RouteHistory
+src/screens/            Home, Live, Readings, Dashboard, Login, Account, RouteHistory,
+                        Notifications, SensorDetail, SensorLocation (GPS capture),
+                        SensorMap (Leaflet in a WebView)
 src/components/         chart and shared UI primitives
+src/utils/geo.js        accuracy scale, 1/accuracy² averaging, haversine — pure, tested
 src/theme.js            light + dark palettes (Account > Appearance; defaults to light)
 ```
 

@@ -368,59 +368,89 @@ cutoff_str = frappe.utils.cstr(cutoff)[:19]
 EMPTY = {"total": 0, "active": 0, "stale": 0, "last_reading": None}
 
 
+# One scan of `tabSensor Reading` for the whole request, not one per tab.
+#
+# `health()` used to run its own `GROUP BY sensor_name` query every time it was
+# called, and it is called once per enabled tab plus once for the site total —
+# a dozen or more full scans of an unwindowed, unindexed table (there is no
+# index leading with sensor_name and none on (site_name, timestamp) — see the
+# app's own perf notes) for a single request. That is what a phone's own
+# request-timing log caught as "SLOW" on `dashboard_health`. Grouping by
+# (sensor_name, sensor_type) in ONE query and answering every tab's `names`
+# and `types` filters from the result in Python removes every scan but this one.
+scan_where = []
+scan_where.extend(site_where)
+scan_params = {}
+scan_params.update(site_params)
+scan_rows = frappe.db.sql(
+	"SELECT sensor_name, LOWER(sensor_type) AS sensor_type, MAX(timestamp) AS last_reading "
+	"FROM `tabSensor Reading` WHERE " + " AND ".join(scan_where) + " GROUP BY sensor_name, sensor_type",
+	scan_params,
+	as_dict=True,
+)
+
+scan_by_sensor = {}
+for row in scan_rows:
+	name = row.get("sensor_name")
+	stamp = frappe.utils.cstr(row.get("last_reading") or "")[:19]
+	if not name or not stamp:
+		continue
+	if name not in scan_by_sensor:
+		scan_by_sensor[name] = {}
+	scan_by_sensor[name][row.get("sensor_type") or ""] = stamp
+
+
 def health(sensor_names, sensor_types):
-	"""{total, active, stale, last_reading} for one scope.
+	"""{total, active, stale, last_reading} for one scope, from the shared scan.
 
 	`sensor_names` None means no name restriction; an EMPTY list means the scope
 	owns no sensors and counts zero — never the site's total. `sensor_types` is
-	the same, by measure.
+	the same, by measure; when both are given a sensor counts only if it both
+	matches a wanted name AND has reported under a wanted type — a cold room
+	tab is its monitoring-tagged sensors AND the measures it was configured for.
 
-	One GROUP BY over the readings: a sensor is counted once, and it is active
-	when its newest reading is inside the stale window. A sensor that has never
-	reported is not counted at all — the scope comes from Sensor Reading, so
-	there is nothing to call fresh or stale.
+	A sensor is counted once, and it is active when its newest MATCHING reading
+	is inside the stale window. A sensor that has never reported at all — or
+	never reported one of the wanted types — is not counted, the same as
+	before: the scope comes from Sensor Reading, so there is nothing to call
+	fresh or stale.
 	"""
 	if sensor_names is not None and not sensor_names:
 		return EMPTY.copy()
 	if sensor_types is not None and not sensor_types:
 		return EMPTY.copy()
 
-	where = []
-	where.extend(site_where)
-	params = {}
-	params.update(site_params)
+	wanted_names = set(sensor_names) if sensor_names is not None else None
+	wanted_types = set(sensor_types) if sensor_types is not None else None
 
-	if sensor_names is not None:
-		picked = named_params("sn", sensor_names)
-		params.update(picked["params"])
-		where.append("sensor_name IN (" + ", ".join(picked["keys"]) + ")")
-	if sensor_types is not None:
-		picked = named_params("st", sensor_types)
-		params.update(picked["params"])
-		where.append("LOWER(sensor_type) IN (" + ", ".join(picked["keys"]) + ")")
-
-	rows = frappe.db.sql(
-		"SELECT sensor_name, MAX(timestamp) AS last_reading FROM `tabSensor Reading` "
-		"WHERE " + " AND ".join(where) + " GROUP BY sensor_name",
-		params,
-		as_dict=True,
-	)
-
+	total = 0
 	active = 0
 	latest = None
-	for row in rows:
-		stamp = frappe.utils.cstr(row.get("last_reading") or "")[:19]
-		if not stamp:
+	for name in scan_by_sensor:
+		if wanted_names is not None and name not in wanted_names:
 			continue
+		per_type = scan_by_sensor[name]
+		if wanted_types is not None:
+			matched = []
+			for measured in per_type:
+				if measured in wanted_types:
+					matched.append(per_type[measured])
+			if not matched:
+				continue
+			stamp = max(matched)
+		else:
+			stamp = max(per_type.values())
+
+		total = total + 1
 		if stamp >= cutoff_str:
 			active = active + 1
 		if latest is None or stamp > latest:
 			latest = stamp
 
 	return {
-		"total": len(rows),
+		"total": total,
 		"active": active,
-		"stale": len(rows) - active,
+		"stale": total - active,
 		"last_reading": latest,
 	}
 
