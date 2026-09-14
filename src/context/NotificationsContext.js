@@ -45,10 +45,7 @@ const POLL_MS = 60000;
 const NOT_PROVIDED = {
   unread: 0,
   supported: false,
-  ready: false,
-  cursor: null,
   markOpened: () => null,
-  refreshCount: async () => {},
 };
 
 const NotificationsContext = createContext(null);
@@ -221,8 +218,8 @@ export function NotificationsProvider({ children }) {
   }, [persistCursor]);
 
   const value = useMemo(
-    () => ({ unread, supported, ready, cursor, markOpened, refreshCount }),
-    [unread, supported, ready, cursor, markOpened, refreshCount],
+    () => ({ unread, supported, markOpened }),
+    [unread, supported, markOpened],
   );
 
   return <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>;

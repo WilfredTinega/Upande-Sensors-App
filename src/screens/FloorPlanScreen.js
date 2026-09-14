@@ -72,8 +72,16 @@ const POLL_MS = 60 * 1000;
 /** Door totals are summed over this window, as the web board's default. */
 const DOOR_HOURS = 24;
 
+/**
+ * 1× is the plan at its fitted size. A plan wider than the phone may go below
+ * that — down to whatever shows the whole of it, computed per plan — but never
+ * past MIN_SCALE_FLOOR, where a blueprint is too small to read anyway.
+ */
 const MIN_SCALE = 1;
-const MAX_SCALE = 4;
+const MIN_SCALE_FLOOR = 0.2;
+const MAX_SCALE = 6;
+/** Each zoom-button tap multiplies (or divides) the current scale by this. */
+const ZOOM_STEP = 1.6;
 const DOUBLE_TAP_MS = 300;
 /** A press that moved less than this is a tap, not a pan. */
 const TAP_SLOP = 8;
@@ -511,6 +519,8 @@ const distance = (touches) => {
 function BlueprintStage({ uri, headers, imageSize, placements, markers, readings, doorStates, unitForType, onSelect }) {
   const t = useTheme();
   const { height: windowHeight } = useWindowDimensions();
+  /** What is actually on screen, for the zoom-out floor below. */
+  const [boxWidth, setBoxWidth] = useState(0);
 
   const fitted = useMemo(() => {
     if (!imageSize?.width || !imageSize?.height) return null;
@@ -518,6 +528,24 @@ function BlueprintStage({ uri, headers, imageSize, placements, markers, readings
     const w = Math.round((h * imageSize.width) / imageSize.height);
     return { width: w, height: h };
   }, [imageSize, windowHeight]);
+
+  /**
+   * How far out this plan may be zoomed: far enough that the whole of it — and
+   * so every sensor on it — is on screen at once.
+   *
+   * Fitting to height means a wide plan is wider than the phone, and 1× was
+   * also the floor, so there was no way to see both ends of one at the same
+   * time: you could only scroll between them. The floor is the scale that
+   * makes the full width fit the visible box, so zooming out bottoms out
+   * exactly where the whole plan is visible and no further. A plan that
+   * already fits keeps 1× as its floor — shrinking that one buys nothing.
+   */
+  const minScale = useMemo(() => {
+    if (!fitted || !boxWidth) return MIN_SCALE;
+    return Math.max(MIN_SCALE_FLOOR, Math.min(MIN_SCALE, boxWidth / fitted.width));
+  }, [fitted, boxWidth]);
+  const minScaleRef = useRef(minScale);
+  minScaleRef.current = minScale;
 
   const scale = useRef(new Animated.Value(1)).current;
   const translateX = useRef(new Animated.Value(0)).current;
@@ -534,11 +562,13 @@ function BlueprintStage({ uri, headers, imageSize, placements, markers, readings
   const apply = useCallback(
     (next) => {
       const f = fittedRef.current;
-      const s = Math.max(MIN_SCALE, Math.min(MAX_SCALE, next.scale));
+      const s = Math.max(minScaleRef.current, Math.min(MAX_SCALE, next.scale));
       // The image may not leave its box: at scale s the overhang on each side
-      // is (s − 1) · size / 2, which is as far as it can be dragged.
-      const maxX = f ? ((s - 1) * f.width) / 2 : 0;
-      const maxY = f ? ((s - 1) * f.height) / 2 : 0;
+      // is (s − 1) · size / 2, which is as far as it can be dragged. Zoomed
+      // OUT there is no overhang at all — that arithmetic goes negative and
+      // would invert the clamp — so the floor is 0: nothing to pan.
+      const maxX = f ? Math.max(0, ((s - 1) * f.width) / 2) : 0;
+      const maxY = f ? Math.max(0, ((s - 1) * f.height) / 2) : 0;
       const x = Math.max(-maxX, Math.min(maxX, next.x));
       const y = Math.max(-maxY, Math.min(maxY, next.y));
       current.current = { scale: s, x, y };
@@ -557,6 +587,45 @@ function BlueprintStage({ uri, headers, imageSize, placements, markers, readings
       Animated.spring(translateY, { toValue: 0, useNativeDriver: true }),
     ]).start();
   }, [scale, translateX, translateY]);
+
+  /**
+   * The zoom buttons' step, animated rather than jumped like a gesture frame —
+   * there is no finger position to keep steady under, so the centre is the
+   * only sensible anchor, and a spring makes the step read as one deliberate
+   * move rather than a cut. `factor` > 1 zooms in, < 1 zooms out; the same
+   * bounds `apply` uses keep it from panning the image out of its box once
+   * the new scale shrinks how far it may travel.
+   */
+  const zoomBy = useCallback(
+    (factor) => {
+      const f = fittedRef.current;
+      const s = Math.max(minScaleRef.current, Math.min(MAX_SCALE, current.current.scale * factor));
+      const maxX = f ? Math.max(0, ((s - 1) * f.width) / 2) : 0;
+      const maxY = f ? Math.max(0, ((s - 1) * f.height) / 2) : 0;
+      /**
+       * Grow to the RIGHT, never off the left edge.
+       *
+       * A scale transform works from the centre, so zooming in pushed the
+       * plan's left edge out by (s−1)·width/2 — and the horizontal ScrollView
+       * cannot follow it there, because a transform does not change the
+       * content's laid-out width, so its scroll range still ends at x = 0.
+       * Whatever went left of that was simply unreachable: zooming ate the
+       * left side of the plan. +maxX is exactly the offset that puts that edge
+       * back at the start of the scroll range, so the extra width appears on
+       * the right, where it can be scrolled to. Pinch is left alone — there
+       * the anchor is the point under the fingers, which is the right answer.
+       */
+      const x = maxX;
+      const y = Math.max(-maxY, Math.min(maxY, current.current.y));
+      current.current = { scale: s, x, y };
+      Animated.parallel([
+        Animated.spring(scale, { toValue: s, useNativeDriver: true }),
+        Animated.spring(translateX, { toValue: x, useNativeDriver: true }),
+        Animated.spring(translateY, { toValue: y, useNativeDriver: true }),
+      ]).start();
+    },
+    [scale, translateX, translateY],
+  );
 
   const responder = useMemo(
     () =>
@@ -620,7 +689,9 @@ function BlueprintStage({ uri, headers, imageSize, placements, markers, readings
   }, [reset]);
 
   return (
+    <View style={{ width: '100%' }}>
     <View
+      onLayout={(e) => setBoxWidth(e.nativeEvent.layout.width)}
       style={{
         width: '100%',
         overflow: 'hidden',
@@ -682,6 +753,53 @@ function BlueprintStage({ uri, headers, imageSize, placements, markers, readings
         <Skeleton height={240} radius={radius.md} />
       )}
     </View>
+      {/* Buttons, not just pinch: a floor plan on a phone that has never been
+          told it can pinch-zoom looks like it can't be zoomed at all. Outside
+          the `overflow: hidden` box so they float over it rather than getting
+          clipped at its edge, and outside the horizontal ScrollView so a tap
+          on them is never mistaken for a scroll. */}
+      {fitted ? (
+        <View
+          style={{
+            position: 'absolute',
+            right: spacing.sm,
+            bottom: spacing.sm,
+            gap: spacing.xs,
+          }}
+        >
+          <ZoomButton icon="add" label="Zoom in" onPress={() => zoomBy(ZOOM_STEP)} />
+          <ZoomButton icon="remove" label="Zoom out" onPress={() => zoomBy(1 / ZOOM_STEP)} />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function ZoomButton({ icon, label, onPress }) {
+  const t = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      hitSlop={6}
+      style={({ pressed }) => ({
+        width: 34,
+        height: 34,
+        borderRadius: 17,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: t.mode === 'dark' ? 'rgba(20,20,19,0.92)' : 'rgba(255,255,255,0.94)',
+        opacity: pressed ? 0.7 : 1,
+        elevation: 3,
+        shadowColor: '#000',
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 1 },
+      })}
+    >
+      <Ionicons name={icon} size={18} color={t.textPrimary} />
+    </Pressable>
   );
 }
 
@@ -841,24 +959,19 @@ export function FloorPlanScreen() {
       ) : !blueprint ? (
         <EmptyState title="This plan has no blueprint yet — add one on the website" message={plan.plan_name || plan.name} />
       ) : (
-        <>
-          <Card padded={false} style={{ marginBottom: spacing.md }}>
-            <BlueprintStage
-              uri={blueprint}
-              headers={headers}
-              imageSize={imageSize}
-              placements={plan.placements}
-              markers={plan.markers}
-              readings={data?.readings}
-              doorStates={data?.door_states}
-              unitForType={unitForType}
-              onSelect={setSelection}
-            />
-          </Card>
-          <Text style={[type.caption, { color: t.textMuted, textAlign: 'center' }]}>
-            Swipe to scroll · pinch to zoom · double-tap to reset · tap a pin for details
-          </Text>
-        </>
+        <Card padded={false}>
+          <BlueprintStage
+            uri={blueprint}
+            headers={headers}
+            imageSize={imageSize}
+            placements={plan.placements}
+            markers={plan.markers}
+            readings={data?.readings}
+            doorStates={data?.door_states}
+            unitForType={unitForType}
+            onSelect={setSelection}
+          />
+        </Card>
       )}
 
       <DetailSheet selection={selection} unitForType={unitForType} onClose={() => setSelection(null)} />

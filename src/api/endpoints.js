@@ -903,7 +903,13 @@ export function getAlerts(
 /**
  * How many breaches the account may see that were created after `since` —
  * the number on the header bell's badge. Same scope as `getAlerts` with no
- * site. Resolves `{ count }`.
+ * site. Resolves `{ count, latest }`, where `latest` is the `creation` of the
+ * newest row the server holds, at full precision: that is the value
+ * `NotificationsContext` stores verbatim as the next `since`, so a badge that
+ * has been cleared cannot re-count the row it was cleared on.
+ *
+ * With no `since` the server falls back to its own 30-day window, so a phone
+ * that has never opened the list counts the same rows the list shows.
  */
 export function getAlertsCount({ since = null } = {}, signal) {
   return client.call(APP_ONLY.alertsCount, { since: since || undefined }, { signal });

@@ -137,7 +137,7 @@ when the server does not say (an older `upande_sensors`, or a blank field).
 ## Push notifications
 
 When a reading crosses a limit configured on its monitoring, the server sends a push to every
-phone registered for that site (Android channel `alerts`). Tapping it opens **Notifications** —
+phone registered for that site (Android channel `alerts-v2`, which plays Frappe's success sound). Tapping it opens **Notifications** —
 the bell at the top right of every screen — which lists every breach across the sites the
 account may see, newest first, grouped by day; the bell carries a count of the ones raised since
 the list was last opened. Tapping a row selects that site and opens **Live**. The list works with

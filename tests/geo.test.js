@@ -6,8 +6,8 @@
  * What is pinned: the accuracy scale the screen documents (±3 m = 100 %,
  * ±50 m = 0 %), that a sharp fix outweighs a vague one in the running
  * position, that 0,0 is "not set", and that the overwrite distance is right.
- * The scale in particular is a promise made on screen in words, so a change to
- * the constants has to change the words too — this fails until it does.
+ * The scale in particular is what colours the scan ring, so moving either end
+ * of it moves what the installer reads as "good enough to save".
  */
 const fs = require('fs');
 const path = require('path');
@@ -37,7 +37,7 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
   check('the midpoint of the scale is 50 %', geo.accuracyPercent(26.5) === 50);
   check('no accuracy is no percentage, not 100 %', geo.accuracyPercent(undefined) === null);
   check('a negative accuracy is no percentage', geo.accuracyPercent(-1) === null);
-  check('the constants match the words on screen', geo.ACCURACY_FULL_M === 3 && geo.ACCURACY_ZERO_M === 50);
+  check('the scale runs from 3 m to 50 m', geo.ACCURACY_FULL_M === 3 && geo.ACCURACY_ZERO_M === 50);
 
   // Inverse-variance weighting.
   {

@@ -11,15 +11,15 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
-import { Card, EmptyState, SectionTitle, StatusChip } from '../components/ui';
+import { Card, EmptyState, SectionTitle, SelectField, StatusChip } from '../components/ui';
 import { Skeleton } from '../components/Skeleton';
 import { TTL_LIVE, cacheKey, invalidate } from '../api/cache';
-import { getDashboardHealth, getLocationCoverage } from '../api/endpoints';
+import { getDashboardHealth } from '../api/endpoints';
 import { latestStamp, liveKey, loadLiveForSite, siteKey } from '../api/liveSite';
 import { useAuth } from '../context/AuthContext';
 import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
-import { goToLive, goToSensorLocation, goToSensorMap } from '../navigation/ref';
+import { goToLive } from '../navigation/ref';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { font } from '../theme';
 import { isStale, relativeTime } from '../utils/dates';
@@ -29,10 +29,10 @@ import { isStale, relativeTime } from '../utils/dates';
  *
  * Everything on it is driven by Sensor Settings through `useDashboard()`: the
  * title and welcome line, the dashboards grid (exactly the enabled, permitted
- * Main Tabs, in the server's order), the support contact. Nothing here is a
- * destination of its own — it is the place that says how the selected site is
- * doing and offers the way to each screen, for someone opening the app to
- * check rather than to work.
+ * Main Tabs, in the server's order), the support contact. It answers "how is
+ * the selected site doing" and opens one of its dashboards — Readings, the
+ * sensor list and the account are each a tap on the bottom tab bar instead,
+ * not a link kept here.
  */
 
 /**
@@ -77,7 +77,6 @@ function greeting() {
 /** Shared constants, so a pending query doesn't yield a new object per render. */
 const EMPTY_SENSORS = [];
 const EMPTY_LIVE = {};
-const EMPTY_COVERAGE = { with_coordinates: 0, without_coordinates: 0 };
 
 /**
  * One dashboard's counts out of a `dashboard_health` payload, or null.
@@ -125,11 +124,11 @@ export function healthForTab(payload, tab) {
  * per-dashboard counts are all about that site and nothing else, so naming it
  * here is naming the subject of the page.
  *
- * The logo is gone from the card. The header directly above it now carries the
- * mark, and repeating it 60px lower reads as a rendering fault rather than as
- * branding; a site name is also a place, which a brand mark does not introduce.
- * Losing it lets the name have the full card width, which matters — site names
- * run long ("Kuehne Nagel KN1 & KN2").
+ * It is also the site FILTER, and the only one on this screen: the header here
+ * carries neither the site nor the word "Home", because this card says both and
+ * saying them twice, 60px apart, reads as a rendering fault. The name has the
+ * full card width, which matters — site names run long ("Kuehne Nagel KN1 &
+ * KN2").
  *
  * `pending` is the post-login gap where the site is still being auto-picked. A
  * skeleton there rather than a title that resolves into a *different* string a
@@ -138,7 +137,7 @@ export function healthForTab(payload, tab) {
  * purpose from the header filter — and both read straight off `site` itself,
  * so there is no third, no-site-at-all case left to cover with a fallback.
  */
-function Hero({ site, pending, name, message }) {
+function Hero({ site, sites, setSite, pending, name, message }) {
   const t = useTheme();
   return (
     <Card style={{ marginBottom: spacing.xl }}>
@@ -146,11 +145,26 @@ function Hero({ site, pending, name, message }) {
         {pending ? (
           // Sized to the line it stands in for, so the card does not resize
           // under the reader when the name lands.
-          <Skeleton width="65%" height={22} radius={radius.sm} />
+          <Skeleton width="65%" height={32} radius={radius.sm} />
         ) : (
-          <Text numberOfLines={2} style={[type.title, { color: t.textPrimary }]}>
-            {site || 'All sites'}
-          </Text>
+          /* The site name here IS the filter. Home's header carries neither
+             the site nor the word "Home" — this card already says both — so
+             without this there would be nowhere on the landing screen to
+             change site, which is what every other screen is scoped by. */
+          <SelectField
+            variant="bare"
+            compact
+            allowClear
+            clearLabel="All sites"
+            value={site}
+            options={sites}
+            onChange={setSite}
+            placeholder="All sites"
+            style={{ alignSelf: 'flex-start' }}
+            // Bigger than `type.title`: this is the subject of the whole screen
+            // and the header no longer states it anywhere.
+            textStyle={[type.title, { color: t.textPrimary, fontSize: 26, lineHeight: 32 }]}
+          />
         )}
         <Text numberOfLines={1} style={[type.body, { color: t.textSecondary, marginTop: 2 }]}>
           {greeting()}
@@ -215,14 +229,13 @@ function SiteStatusCard({ site, pending, counts, newest, error }) {
     >
       <Card>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+          {/* The site is named once on this screen, by the card above, which is
+              also the filter for it. Repeating it here — two cards apart, in the
+              same words — said nothing the reader had not just read, so what is
+              left is what this card is actually about: the sensors. */}
           <View style={{ flex: 1 }}>
             <Text style={[type.label, { color: t.textSecondary, textTransform: 'uppercase' }]}>
-              Site status
-            </Text>
-            <Text numberOfLines={1} style={[type.heading, { color: t.textPrimary, marginTop: 2 }]}>
-              {/* `site` is null both while still picking AND once "All sites"
-                  has been chosen — `pending` is what tells the two apart. */}
-              {pending ? 'Loading…' : site || 'All sites'}
+              Sensor status
             </Text>
           </View>
           {pending ? (
@@ -350,8 +363,13 @@ function TabCard({ tab, width, active, onPress, health, healthLoading, showHealt
         >
           <Ionicons name={iconForTab(tab)} size={20} color={t.accent} />
         </View>
-        {/* Two lines reserved whether the title needs them or not. */}
-        <Text numberOfLines={2} style={[type.heading, { color: t.textPrimary, lineHeight: 20, height: 40 }]}>
+        {/* Two lines reserved whether the title needs them or not — so the
+            reserved height has to track the line height, or a two-line name
+            like "Cold Chain Monitoring" loses its second line. */}
+        <Text
+          numberOfLines={2}
+          style={[type.heading, { fontSize: 18, color: t.textPrimary, lineHeight: 23, height: 46 }]}
+        >
           {tab.title || tab.label}
         </Text>
         {/*
@@ -381,113 +399,8 @@ function TabCard({ tab, width, active, onPress, health, healthLoading, showHealt
   );
 }
 
-/** Icon 36 + gap 8 + title 40 + counts row 18 + card padding 32. */
-const TILE_HEIGHT = 134;
-
-/**
- * The sensor roster, in one tile: is it reporting (active/stale, the same
- * numbers `SiteStatusCard` shows) and is it positioned (with/without
- * coordinates, from `location_coverage`) — the two questions the map and the
- * coordinates screen each answer, so the tile is the front door to both.
- *
- * The whole card opens the sensor list; the "+" is its own target (the
- * header's own add-coordinates button, repeated here so Home offers the same
- * shortcut) and stops its own touch from also opening the list underneath it.
- */
-function SensorListTile({ counts, coverage, coverageLoading, coverageUnsupported, canSet, pending }) {
-  const t = useTheme();
-  const rowStyle = {
-    flexDirection: 'row',
-    gap: spacing.md,
-    marginTop: spacing.md,
-    paddingTop: spacing.md,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: t.border,
-  };
-  const skeletonPair = (key) => (
-    <View key={key} style={{ flex: 1, gap: 6 }}>
-      <Skeleton width="50%" height={20} />
-      <Skeleton width="70%" height={10} />
-    </View>
-  );
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Open the sensor list"
-      onPress={() => goToSensorMap()}
-      style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1, marginBottom: spacing.md })}
-    >
-      <Card>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-          <View
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: radius.md,
-              backgroundColor: t.accentSoft,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Ionicons name="map-outline" size={20} color={t.accent} />
-          </View>
-          <Text style={[type.heading, { color: t.textPrimary, flex: 1 }]}>Sensor list</Text>
-          {canSet ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Add a sensor's coordinates"
-              onPress={(event) => {
-                event.stopPropagation();
-                goToSensorLocation();
-              }}
-              hitSlop={8}
-              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1, padding: 2 })}
-            >
-              <Ionicons name="add-circle-outline" size={22} color={t.accent} />
-            </Pressable>
-          ) : null}
-          <Ionicons name="chevron-forward" size={16} color={t.textMuted} />
-        </View>
-
-        <View style={rowStyle}>
-          {pending ? (
-            [0, 1].map(skeletonPair)
-          ) : (
-            <>
-              <Count value={counts.live} label="active" colour={t.status.good} />
-              <Count
-                value={counts.stale}
-                label="stale"
-                colour={counts.stale ? t.status.critical : t.textMuted}
-              />
-            </>
-          )}
-        </View>
-
-        {/* Coordinate coverage needs its own server support (location_coverage
-            is app-only, no Server Script fallback); an older server just gets
-            one row of counts instead of two, not a row of false zeros. */}
-        {coverageUnsupported ? null : (
-          <View style={rowStyle}>
-            {pending || coverageLoading ? (
-              [0, 1].map(skeletonPair)
-            ) : (
-              <>
-                <Count value={coverage.with_coordinates ?? 0} label="with coordinates" colour={t.status.good} />
-                <Count
-                  value={coverage.without_coordinates ?? 0}
-                  label="without coordinates"
-                  colour={coverage.without_coordinates ? t.status.warning : t.textMuted}
-                />
-              </>
-            )}
-          </View>
-        )}
-      </Card>
-    </Pressable>
-  );
-}
+/** Icon 36 + gap 8 + title 46 + counts row 18 + card padding 32. */
+const TILE_HEIGHT = 140;
 
 /**
  * A phone number or an email, as configured. Anything with an `@` is mail;
@@ -554,6 +467,8 @@ export function HomeScreen() {
   const { user } = useAuth();
   const {
     site,
+    sites,
+    setSite,
     sitePending,
     sitesLoading,
     tabs,
@@ -565,7 +480,6 @@ export function HomeScreen() {
     supportContact,
     unitForType,
     refreshReference,
-    appSettings,
   } = useDashboard();
 
   /**
@@ -621,18 +535,6 @@ export function HomeScreen() {
   // total wearing a dashboard's name.
   const healthUnsupported = Boolean(health.error?.isMissingEndpoint);
 
-  /**
-   * With/without coordinates, for the Sensor list tile. App-only (no Server
-   * Script fallback), so an older server answers `isMissingEndpoint` and the
-   * tile drops that row rather than showing false zeros.
-   */
-  const coverage = useQuery(
-    sitePending ? null : cacheKey('location_coverage', { site }),
-    () => getLocationCoverage(site),
-    { ttl: TTL_LIVE },
-  );
-  const coverageUnsupported = Boolean(coverage.error?.isMissingEndpoint);
-
   const refresh = useCallback(async () => {
     // Gated on `sitePending`, not `site`: "All sites" is `site === null` once
     // settled, and a pull there must still refresh — it was skipping the
@@ -645,15 +547,13 @@ export function HomeScreen() {
       invalidate(siteKey(site));
       invalidate(liveKey(site));
       invalidate(cacheKey('dashboard_health', { site }));
-      invalidate(cacheKey('location_coverage', { site }));
     }
     await Promise.all([
       !sitePending ? live.refresh() : Promise.resolve(),
       !sitePending && !healthUnsupported ? health.refresh() : Promise.resolve(),
-      !sitePending && !coverageUnsupported ? coverage.refresh() : Promise.resolve(),
       refreshReference(),
     ]);
-  }, [site, sitePending, live, health, healthUnsupported, coverage, coverageUnsupported, refreshReference]);
+  }, [site, sitePending, live, health, healthUnsupported, refreshReference]);
 
   const pending = sitePending || sitesLoading || live.loading;
   const refreshing = live.refreshing;
@@ -666,7 +566,11 @@ export function HomeScreen() {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: t.background }}
-      contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xxl }}
+      // No bottom padding of its own: the last thing on the page already
+      // carries a 24pt margin, and stacking another 32 under it added a strip
+      // of nothing that was enough on its own to make a page which otherwise
+      // fits the screen scroll.
+      contentContainerStyle={{ padding: spacing.lg, paddingBottom: 0 }}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -678,6 +582,8 @@ export function HomeScreen() {
     >
       <Hero
         site={site}
+        sites={sites}
+        setSite={setSite}
         // Only the pick itself, not the readings: the name is known as soon as
         // the site is, and waiting on `live` would skeleton a settled title.
         pending={sitePending || sitesLoading}
@@ -739,18 +645,6 @@ export function HomeScreen() {
           />
         </Card>
       )}
-
-      {/* Readings and Account are still one tap away — the bottom tab bar and
-          the header's account icon — so dropping their shortcuts here does
-          not strand either screen; it makes room for the roster below. */}
-      <SensorListTile
-        counts={counts}
-        coverage={coverage.data || EMPTY_COVERAGE}
-        coverageLoading={coverage.loading}
-        coverageUnsupported={coverageUnsupported}
-        canSet={Boolean(appSettings?.can_set_location)}
-        pending={pending}
-      />
 
       {supportContact ? <SupportLine contact={supportContact} /> : null}
     </ScrollView>

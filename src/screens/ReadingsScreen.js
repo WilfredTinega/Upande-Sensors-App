@@ -170,13 +170,19 @@ export function ReadingsScreen() {
         />
       }
     >
+      {/* Whole-day ranges only — `RANGES.filter(!r.hours)`. A rolling window
+          like "24h" is a chart thing: it is applied by cutting buckets after
+          they arrive, and this table is paged BY THE SERVER against whole
+          dates, with the server's own row count under it. Cutting rows here
+          would hide some while the total still counted them, and "24h" over a
+          table listing two days of stamped rows would be a label that lies. */}
       {sitesLoading ? (
         <Skeleton height={38} radius={radius.pill} style={{ marginBottom: spacing.lg }} />
       ) : (
         <ChoiceButtons
           disabled={filtersLocked}
           style={{ marginBottom: spacing.lg }}
-          options={RANGES.map((r) => ({ label: r.label, value: r.key }))}
+          options={RANGES.filter((r) => !r.hours).map((r) => ({ label: r.label, value: r.key }))}
           value={rangeKey}
           onChange={setRangeKey}
         />

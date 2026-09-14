@@ -348,8 +348,10 @@ export function SettingsScreen() {
         </View>
       </Card>
 
-      <SectionTitle>Security</SectionTitle>
-      <Card style={{ marginBottom: spacing.xl }}>
+      {/* No section header: it said "Security" over a row that says
+          "Fingerprint or face sign-in". Each of these three is one
+          self-describing line, so the line is the whole section. */}
+      <Card style={{ marginBottom: spacing.sm }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
           <Ionicons
             name={biometrics.icon}
@@ -390,8 +392,7 @@ export function SettingsScreen() {
           but raising an issue is not — hiding the entry would hide the only way
           to report a problem. */}
       <>
-          <SectionTitle>{isSystemManager ? 'Activity' : 'Support'}</SectionTitle>
-          <Card style={{ marginBottom: spacing.xl }}>
+          <Card style={{ marginBottom: spacing.sm }}>
             <Pressable
               accessibilityRole="button"
               onPress={goToRouteHistory}
@@ -425,7 +426,6 @@ export function SettingsScreen() {
           answer was "no", the one action that can change it. Never an error
           box: a phone without alerts is a phone without alerts, and the app
           works the same either way. */}
-      <SectionTitle>Notifications</SectionTitle>
       <Card style={{ marginBottom: spacing.xl }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
           <Ionicons
@@ -443,10 +443,10 @@ export function SettingsScreen() {
           </View>
           {pushLine.tone ? <StatusChip tone={pushLine.tone} label={pushLine.tone === 'good' ? 'On' : 'Off'} /> : null}
         </View>
-        {/* Offered on `unconfigured` too: it re-runs the whole registration,
-            so a build that gained Firebase through an OTA-updated config, or a
-            phone whose Firebase init raced the first attempt, gets a second
-            look without a restart. */}
+        {/* Offered on `unconfigured` too: a phone whose Firebase init raced the
+            registration at sign-in gets a second look without a restart. It
+            cannot rescue a build that shipped without `google-services.json` —
+            Firebase reads that at build time, and no OTA update can add it. */}
         {push.status === PUSH_STATUS.DENIED ||
         push.status === PUSH_STATUS.FAILED ||
         push.status === PUSH_STATUS.UNCONFIGURED ? (

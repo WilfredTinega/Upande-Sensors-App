@@ -130,9 +130,12 @@ export const SENSOR_LOCATION_ROUTE = 'SensorLocation';
 export const SENSOR_MAP_ROUTE = 'SensorMap';
 
 /**
- * Departure routes for the two location tabs, by route name — the same
- * problem Notifications solves above, for two screens that also open each
- * other. Home is the fallback for the same reason.
+ * Departure routes by route name, for screens with a back chevron instead of
+ * a tab button — the same problem Notifications solves above. Only "Set
+ * coordinates" reads this today (the sensor list is a tab of its own now, not
+ * something to leave), but it can be reached from more than one place — the
+ * list's header, a sensor's detail screen — so its own arrival still has to
+ * be remembered. Home is the fallback for the same reason.
  *
  * One extra rule: opening X from Y when Y was itself opened from X leaves X's
  * departure alone. Otherwise map → "Set coordinates" → "View on map" → back
@@ -176,8 +179,4 @@ export function leaveSensorLocation() {
  */
 export function goToSensorMap({ focus } = {}) {
   openHidden(SENSOR_MAP_ROUTE, { focus: focus || null });
-}
-
-export function leaveSensorMap() {
-  leaveHidden(SENSOR_MAP_ROUTE);
 }

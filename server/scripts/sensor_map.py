@@ -23,12 +23,13 @@
 #
 # Same response shape as `upande_sensors.api.mobile.sensor_map`:
 #
-#   {stale_minutes,
+#   {site, stale_minutes,
 #    sensors: [{name, sensor_name, sensor_site, sensor_type, monitoring,
 #               latitude, longitude, location_accuracy_m, last_reading, online,
 #               values: {<type>: {value, unit, ts}}}],
 #    center: {latitude, longitude} | null,
-#    map: {mapbox_token}}
+#    map: {mapbox_token},
+#    server_time}
 #
 # Params: site (optional), stale_minutes (optional)
 
@@ -58,6 +59,12 @@ LOCATION_FIELDS = [
 	"location_updated_on",
 	"location_updated_by",
 	"location_source",
+	# The reverse-geocoded place name. Read here so the app can show it; this
+	# script cannot WRITE it the way the app method does (naming a place needs
+	# upande_sensors.api.places, which the Server Script sandbox cannot import),
+	# so on a site running the scripts it stays whatever the Desk form or the
+	# migrate backfill last resolved.
+	"physical_location",
 ]
 HISTORY_DOCTYPE = "Sensor Location History"
 
@@ -165,6 +172,9 @@ def location_row(row):
 		"location_updated_by": (row.get("location_updated_by") or None)
 		if SENSOR_META.has_field("location_updated_by")
 		else None,
+		"physical_location": (row.get("physical_location") or None)
+		if SENSOR_META.has_field("physical_location")
+		else None,
 		"has_location": ok,
 	}
 
@@ -189,6 +199,29 @@ def sensor_scope_filters(site, allowed_sites):
 		if granted:
 			filters.append(["name", "in", granted])
 	return filters
+
+
+# Sensor Types this account is scoped to, lowercased; empty means unscoped.
+# Only a non-empty grant restricts — the same convention as the Sensor grants
+# above, and the same one `upande_sensors.api.permitted_types` follows.
+ALLOWED_TYPES = []
+if not UNRESTRICTED:
+	for granted_type in scoped("Sensor Type"):
+		ALLOWED_TYPES.append(frappe.utils.cstr(granted_type).strip().lower())
+
+
+def type_allowed(row):
+	"""May this account see the sensor's registered type?
+
+	An account scoped to Temperature is shown Temperature everywhere in the
+	app — every chart, list and map — so the coordinates picker and the map
+	must not be the one place a Pressure sensor still appears. A sensor with
+	no type at all is nobody's to hide and always passes.
+	"""
+	if not ALLOWED_TYPES:
+		return True
+	label = frappe.utils.cstr(row.get("sensor_type") or "").strip().lower()
+	return not label or label in ALLOWED_TYPES
 
 
 # ── end of the shared location block ─────────────────────────────────────────
@@ -283,6 +316,8 @@ for row in found:
 	if not row.get("sensor_name"):
 		continue
 	if not has_coords(row.get("latitude"), row.get("longitude")):
+		continue
+	if not type_allowed(row):
 		continue
 	base = location_row(row)
 	sensors.append(
@@ -392,8 +427,12 @@ if frappe.get_meta("Sensor Settings").has_field("mapbox_access_token"):
 	)
 
 frappe.response["message"] = {
+	"site": site,
 	"stale_minutes": minutes,
 	"sensors": sensors,
 	"center": center,
 	"map": {"mapbox_token": frappe.utils.cstr(mapbox_token).strip()},
+	# Seconds only: the phone parses this to measure its own clock skew, and
+	# `frappe.utils.now()`'s microseconds are not something its parser accepts.
+	"server_time": frappe.utils.cstr(now_str)[:19],
 }

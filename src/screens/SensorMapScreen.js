@@ -39,14 +39,10 @@ const POLL_MS = 60 * 1000;
 
 const EMPTY_SENSORS = [];
 
-/* ── The header's refresh button, talking to whichever map is mounted ─────── */
-
 /**
- * A ScrollView refresh control does not mix with a WebView — the pull gesture
- * is the map's pan — so refreshing is a header icon instead. The header is
- * rendered by the navigator, outside this screen, so the two meet through a
- * tiny module-level bus: the button asks, the mounted screen answers, and the
- * button spins for as long as the screen says it is busy.
+ * Refresh control for the map. A ScrollView pull-to-refresh cannot be used: the
+ * pull gesture is the WebView's own pan. The module-level bus lets the button
+ * reach whichever map instance is currently mounted.
  */
 const refreshRequests = new Set();
 const busyListeners = new Set();
@@ -92,16 +88,9 @@ export function SensorMapRefreshButton() {
 }
 
 /**
- * The header's own "add coordinates" button — for whichever site the header's
- * own filter is set to, so it reads as "add a sensor's position AT THIS SITE"
- * rather than a generic, site-less shortcut.
- *
- * Placed here rather than only in the two empty states below: those only show
- * while the map has nothing (or the server can't answer at all), so once a
- * single sensor at a site gets a pin, every OTHER unlocated sensor at that
- * same site lost its only way in. A header button is visible in every state —
- * loading, populated, or empty — because "add one more" is exactly as common
- * a need as "add the first one".
+ * "Add coordinates" for the site the header filter is set to. Rendered in every
+ * state, not only the empty states below, so sensors still lacking a position
+ * remain reachable once the first one at a site is placed.
  */
 export function SensorMapAddLocationButton() {
   const t = useTheme();
@@ -144,12 +133,25 @@ export function SensorMapAddLocationButton() {
  * website and the desk Sensor form already draw from — so a site with no
  * Mapbox token still gets imagery, just without Mapbox's road labels on top.
  */
+/**
+ * The name on the map is Upande's.
+ *
+ * The source credit after it is NOT decoration and must not be deleted: the
+ * tiles are somebody else's, and every provider here licenses them on the
+ * condition that they are credited — OpenStreetMap under ODbL, Mapbox and Esri
+ * under their terms of service. Stripping it would put the product in breach,
+ * and with Mapbox it is grounds for pulling the account the whole map runs on.
+ * Whichever layer is showing, its own source is named and nothing else is.
+ */
+const MAP_CREDIT = 'Upande Geospatial';
+const credit = (source) => `${MAP_CREDIT} · ${source}`;
+
 function tilesFor(token, satellite) {
   if (satellite) {
     if (token) {
       return {
         url: `https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/tiles/{z}/{x}/{y}?access_token=${encodeURIComponent(token)}`,
-        attribution: '© Mapbox © Maxar',
+        attribution: credit('© Mapbox'),
         maxZoom: 22,
         tileSize: 512,
         zoomOffset: -1,
@@ -157,7 +159,7 @@ function tilesFor(token, satellite) {
     }
     return {
       url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      attribution: '© Esri, Maxar, Earthstar Geographics',
+      attribution: credit('© Esri'),
       maxZoom: 19,
       tileSize: 256,
       zoomOffset: 0,
@@ -166,7 +168,7 @@ function tilesFor(token, satellite) {
   if (token) {
     return {
       url: `https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}?access_token=${encodeURIComponent(token)}`,
-      attribution: '© Mapbox © OpenStreetMap',
+      attribution: credit('© Mapbox'),
       maxZoom: 22,
       tileSize: 512,
       zoomOffset: -1,
@@ -174,7 +176,7 @@ function tilesFor(token, satellite) {
   }
   return {
     url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '© OpenStreetMap contributors',
+    attribution: credit('© OpenStreetMap'),
     maxZoom: 19,
     tileSize: 256,
     zoomOffset: 0,
@@ -203,11 +205,22 @@ function buildHtml(t) {
          border: 1px solid ${t.border}; box-shadow: 0 6px 20px rgba(0,0,0,0.18); }
   .leaflet-popup-tip { background: ${t.surface}; }
   .leaflet-popup-content { margin: 12px 14px; min-width: 180px; font-size: 13px; line-height: 18px; }
-  .pp-name { font-weight: 700; font-size: 15px; margin-bottom: 2px; }
-  .pp-site { color: ${t.textSecondary}; font-size: 12px; margin-bottom: 8px; }
-  .pp-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
-  .pp-row .k { color: ${t.textSecondary}; text-transform: capitalize; }
-  .pp-row .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+  /* Site and sensor on ONE line — "Farm · GH 1" — and never more than one:
+     each half ellipsises rather than wrapping, so a long site name cannot
+     push the sensor onto a second row or grow the popup. */
+  .pp-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; }
+  .pp-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .pp-head .site { color: ${t.textSecondary}; font-size: 12px; flex: 0 1 auto; }
+  .pp-head .sep { color: ${t.textMuted}; font-size: 12px; flex: none; }
+  .pp-head .name { font-weight: 700; font-size: 15px; flex: 1 1 auto; }
+  /* The measures side by side, as the Live readings cards lay them out: the
+     type small above, the value large below. One line as well — they share the
+     width evenly and shrink rather than wrapping. */
+  .pp-vals { display: flex; flex-wrap: nowrap; gap: 12px; }
+  .pp-val { flex: 1 1 0; min-width: 0; }
+  .pp-val .k, .pp-val .v { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pp-val .k { color: ${t.textSecondary}; font-size: 11px; text-transform: capitalize; }
+  .pp-val .v { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; }
   .pp-status { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: ${t.textSecondary}; font-size: 12px; }
   .pp-dot { width: 8px; height: 8px; border-radius: 4px; display: inline-block; }
   .pp-open { display: block; width: 100%; margin-top: 10px; padding: 9px 0; border: 0; border-radius: 8px;
@@ -226,6 +239,10 @@ function buildHtml(t) {
   function ensureMap() {
     if (map) return map;
     map = L.map('map', { zoomControl: true, attributionControl: true, tap: false });
+    // Leaflet writes "Leaflet" in front of every attribution by default. That
+    // one IS optional — the library is BSD, it asks for no credit — so it goes,
+    // unlike the tile source's, which is a licence condition.
+    map.attributionControl.setPrefix(false);
     map.setView([0, 20], 2);
     return map;
   }
@@ -241,14 +258,26 @@ function buildHtml(t) {
   // Built with createElement + textContent only: the strings are the server's.
   function popupFor(s) {
     var root = document.createElement('div');
-    var name = document.createElement('div'); name.className = 'pp-name'; name.textContent = s.label; root.appendChild(name);
-    if (s.site) { var site = document.createElement('div'); site.className = 'pp-site'; site.textContent = s.site; root.appendChild(site); }
-    (s.rows || []).forEach(function (r) {
-      var row = document.createElement('div'); row.className = 'pp-row';
-      var k = document.createElement('span'); k.className = 'k'; k.textContent = r.k;
-      var v = document.createElement('span'); v.className = 'v'; v.textContent = r.v;
-      row.appendChild(k); row.appendChild(v); root.appendChild(row);
-    });
+    // Site first, then the sensor, on one line: the site is the place and the
+    // sensor is one thing in it, so it reads left to right like an address.
+    var head = document.createElement('div'); head.className = 'pp-head';
+    if (s.site) {
+      var site = document.createElement('span'); site.className = 'site'; site.textContent = s.site;
+      var sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '·';
+      head.appendChild(site); head.appendChild(sep);
+    }
+    var name = document.createElement('span'); name.className = 'name'; name.textContent = s.label;
+    head.appendChild(name); root.appendChild(head);
+    if ((s.rows || []).length) {
+      var vals = document.createElement('div'); vals.className = 'pp-vals';
+      s.rows.forEach(function (r) {
+        var cell = document.createElement('div'); cell.className = 'pp-val';
+        var k = document.createElement('span'); k.className = 'k'; k.textContent = r.k;
+        var v = document.createElement('span'); v.className = 'v'; v.textContent = r.v;
+        cell.appendChild(k); cell.appendChild(v); vals.appendChild(cell);
+      });
+      root.appendChild(vals);
+    }
     var st = document.createElement('div'); st.className = 'pp-status';
     var dot = document.createElement('span'); dot.className = 'pp-dot'; dot.style.background = s.color;
     var txt = document.createElement('span'); txt.textContent = s.statusText;
@@ -332,13 +361,16 @@ function LegendChip({ colour, label, count }) {
 }
 
 /**
- * online / offline / none for a row: the third is a sensor that has never
- * reported inside the lookback window, which is grey — a different problem
- * from one that went quiet, which is red.
+ * online / stale / none for a row.
+ *
+ * The three are ranked by how bad they are, and the colours follow: a sensor
+ * reporting now is green, one that has gone quiet is amber — it worked once
+ * and may again — and one that has NEVER reported inside the lookback window
+ * is red, because that is the one nobody has ever seen work.
  */
 function statusOf(s) {
   if (!s.last_reading) return 'none';
-  return s.online ? 'online' : 'offline';
+  return s.online ? 'online' : 'stale';
 }
 
 /** Value text for one measure: "24.7 °C", "—" when null. */
@@ -368,11 +400,9 @@ export function SensorMapScreen({ route }) {
   );
 
   /**
-   * Streets or satellite. Per-session only (not persisted): the choice is
-   * about what you are looking at right now — verifying a pin sits on the
-   * actual greenhouse roof, say — not a standing preference, and the last
-   * thing a map screen should do is silently remember a mode from a previous
-   * visit that nobody meant to leave it in.
+   * Streets or satellite. Not persisted: the choice is about what you are
+   * looking at right now — verifying a pin sits on the actual greenhouse roof,
+   * say — not a standing preference to carry into the next session.
    */
   const [satellite, setSatellite] = useState(false);
 
@@ -381,7 +411,7 @@ export function SensorMapScreen({ route }) {
     [query.data],
   );
   const counts = useMemo(() => {
-    const out = { online: 0, offline: 0, none: 0 };
+    const out = { online: 0, stale: 0, none: 0 };
     sensors.forEach((s) => {
       out[statusOf(s)] += 1;
     });
@@ -389,7 +419,7 @@ export function SensorMapScreen({ route }) {
   }, [sensors]);
 
   const colours = useMemo(
-    () => ({ online: t.status.good, offline: t.status.critical, none: t.textMuted }),
+    () => ({ online: t.status.good, stale: t.status.warning, none: t.status.critical }),
     [t],
   );
 
@@ -425,8 +455,8 @@ export function SensorMapScreen({ route }) {
           rows,
           statusText:
             status === 'none'
-              ? `No reading${acc ? ` · ${acc}` : ''}`
-              : `${status === 'online' ? 'Online' : 'Offline'} · ${age || s.last_reading}${acc ? ` · ${acc}` : ''}`,
+              ? `No readings${acc ? ` · ${acc}` : ''}`
+              : `${status === 'online' ? 'Online' : 'Stale'} · ${age || s.last_reading}${acc ? ` · ${acc}` : ''}`,
         };
       }),
     };
@@ -437,12 +467,7 @@ export function SensorMapScreen({ route }) {
   const webRef = useRef(null);
   const pageReady = useRef(false);
   const fittedFor = useRef(null);
-  // The focus param is consumed once per arrival, not on every poll: a popup
-  // that reopened itself every minute would fight the reader.
   const focusPending = useRef(null);
-  useEffect(() => {
-    focusPending.current = focusName;
-  }, [focusName, route?.params]);
 
   const push = useCallback(() => {
     if (!pageReady.current || !webRef.current) return;
@@ -456,6 +481,24 @@ export function SensorMapScreen({ route }) {
   useEffect(() => {
     if (query.data) push();
   }, [push, query.data]);
+
+  /**
+   * A "View on map" arrival, pushed there and then.
+   *
+   * The screen is a tab that stays mounted, so arriving again usually changes
+   * nothing the map draws — without its own push, the sensor the caller named
+   * would never be looked at. Keyed on the params object rather than on
+   * `push`, which is new after every poll: a popup that reopened itself every
+   * minute would fight the reader.
+   */
+  const params = route?.params;
+  const consumed = useRef(null);
+  useEffect(() => {
+    if (consumed.current === params) return;
+    consumed.current = params;
+    focusPending.current = focusName;
+    if (focusName) push();
+  }, [params, focusName, push]);
 
   const onMessage = useCallback(
     (event) => {
@@ -481,19 +524,20 @@ export function SensorMapScreen({ route }) {
     [query.data, push, sensors, site],
   );
 
-  // The header button's request, answered by whichever map is mounted.
+  // The refresh button's request, answered by whichever map is mounted.
+  const refresh = query.refresh;
   useEffect(() => {
     const handle = async () => {
       setMapBusy(true);
       try {
-        await query.refresh();
+        await refresh();
       } finally {
         setMapBusy(false);
       }
     };
     refreshRequests.add(handle);
     return () => refreshRequests.delete(handle);
-  }, [query]);
+  }, [refresh]);
 
   // Theme colours are baked into the page, so the page follows the theme.
   const html = useMemo(() => buildHtml(t), [t]);
@@ -508,31 +552,41 @@ export function SensorMapScreen({ route }) {
   return (
     <View style={{ flex: 1, backgroundColor: t.background }}>
       {/* Legend: the three colours with their counts, as words beside dots —
-          the colour never carries the meaning on its own. */}
+          the colour never carries the meaning on its own — and the two actions,
+          which stay reachable whatever the map itself can show. */}
+      {/* One line, never wrapping: the two actions live at the end of this row,
+          and a third chip pushed them onto a line of their own. */}
       <View
         style={{
           flexDirection: 'row',
-          flexWrap: 'wrap',
           gap: spacing.sm,
           paddingHorizontal: spacing.lg,
           paddingVertical: spacing.sm,
           alignItems: 'center',
         }}
       >
-        {query.loading && !query.data ? (
-          <>
-            <Skeleton width={84} height={24} radius={radius.pill} />
-            <Skeleton width={84} height={24} radius={radius.pill} />
-            <Skeleton width={96} height={24} radius={radius.pill} />
-          </>
-        ) : (
+        {/* Counts only where there are counts: zeros beside a server that could
+            not answer reads as "every sensor accounted for, none of them
+            reporting", which is a claim about the site.
+
+            A sensor that has never reported still gets its grey pin on the map;
+            it just no longer gets a chip of its own up here. */}
+        {query.data ? (
           <>
             <LegendChip colour={colours.online} label="online" count={counts.online} />
-            <LegendChip colour={colours.offline} label="offline" count={counts.offline} />
-            <LegendChip colour={colours.none} label="no reading" count={counts.none} />
+            <LegendChip colour={colours.stale} label="stale" count={counts.stale} />
             {query.refreshing ? <ActivityIndicator size="small" color={t.accent} /> : null}
           </>
+        ) : query.error ? null : (
+          <>
+            <Skeleton width={84} height={24} radius={radius.pill} />
+            <Skeleton width={84} height={24} radius={radius.pill} />
+          </>
         )}
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 'auto' }}>
+          <SensorMapAddLocationButton />
+          <SensorMapRefreshButton />
+        </View>
       </View>
 
       {query.error && !unsupported ? <ErrorView error={query.error} onRetry={query.refresh} /> : null}
@@ -589,7 +643,6 @@ export function SensorMapScreen({ route }) {
             setSupportMultipleWindows={false}
             overScrollMode="never"
             style={{ flex: 1, backgroundColor: t.background }}
-            renderLoading={() => null}
           />
 
           {/* Streets / satellite, floating over the top-right corner of the

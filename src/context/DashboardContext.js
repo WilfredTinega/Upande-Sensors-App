@@ -160,13 +160,6 @@ export function DashboardProvider({ children }) {
   }, [appSettings, configQuery.loading]);
 
   /**
-   * Live sensor tallies, published by the Live screen so the header can show
-   * them beneath the site filter. Kept here because the header is rendered by
-   * the navigator, outside the screen that computes them.
-   */
-  const [sensorCounts, setSensorCounts] = useState(null);
-
-  /**
    * `null` means every site the user can see.
    *
    * On first run the app picks the site that reported most recently rather than
@@ -469,7 +462,6 @@ export function DashboardProvider({ children }) {
       tabTag,
       configLoading: configQuery.loading,
       configError: configQuery.error,
-      dashboardTitle: configQuery.data?.title || 'Upande Sensors',
       appSettings,
       // Trimmed here so a field left as whitespace in Sensor Settings reads as
       // unset everywhere, rather than rendering a blank line on Home.
@@ -480,8 +472,6 @@ export function DashboardProvider({ children }) {
       setSensorType,
       sensorTypesForTab,
       unitForType,
-      sensorCounts,
-      setSensorCounts,
 
       timezone,
       setTimezoneMode,
@@ -510,7 +500,6 @@ export function DashboardProvider({ children }) {
       sensorType,
       sensorTypesForTab,
       unitForType,
-      sensorCounts,
       timezone,
       setTimezoneMode,
       sidebarOpen,

@@ -9,9 +9,10 @@
 #
 # Same response shape as `upande_sensors.api.mobile.sensor_location_history`:
 #
-#   {rows: [{name, latitude, longitude, accuracy_m, samples, source, device,
+#   {sensor, sensor_name,
+#    rows: [{name, latitude, longitude, accuracy_m, samples, source, device,
 #            user, recorded_at, previous_latitude, previous_longitude}],
-#    total, supported}
+#    total, start, page_length, supported}
 #
 # `supported` is false on a site whose upande_sensors predates the doctype:
 # there is no history there, and the rows are empty because none was ever
@@ -19,7 +20,7 @@
 # and leaves the section out rather than saying "no history".
 #
 # Params: sensor (Sensor docname; a sensor_name is accepted), start (optional),
-#         page_length (optional, default 20, max 200)
+#         page_length (optional, default 50, max 200)
 
 SESSION_USER = frappe.session.user
 UNRESTRICTED = SESSION_USER == "Administrator"
@@ -47,6 +48,12 @@ LOCATION_FIELDS = [
 	"location_updated_on",
 	"location_updated_by",
 	"location_source",
+	# The reverse-geocoded place name. Read here so the app can show it; this
+	# script cannot WRITE it the way the app method does (naming a place needs
+	# upande_sensors.api.places, which the Server Script sandbox cannot import),
+	# so on a site running the scripts it stays whatever the Desk form or the
+	# migrate backfill last resolved.
+	"physical_location",
 ]
 HISTORY_DOCTYPE = "Sensor Location History"
 
@@ -154,6 +161,9 @@ def location_row(row):
 		"location_updated_by": (row.get("location_updated_by") or None)
 		if SENSOR_META.has_field("location_updated_by")
 		else None,
+		"physical_location": (row.get("physical_location") or None)
+		if SENSOR_META.has_field("physical_location")
+		else None,
 		"has_location": ok,
 	}
 
@@ -180,6 +190,29 @@ def sensor_scope_filters(site, allowed_sites):
 	return filters
 
 
+# Sensor Types this account is scoped to, lowercased; empty means unscoped.
+# Only a non-empty grant restricts — the same convention as the Sensor grants
+# above, and the same one `upande_sensors.api.permitted_types` follows.
+ALLOWED_TYPES = []
+if not UNRESTRICTED:
+	for granted_type in scoped("Sensor Type"):
+		ALLOWED_TYPES.append(frappe.utils.cstr(granted_type).strip().lower())
+
+
+def type_allowed(row):
+	"""May this account see the sensor's registered type?
+
+	An account scoped to Temperature is shown Temperature everywhere in the
+	app — every chart, list and map — so the coordinates picker and the map
+	must not be the one place a Pressure sensor still appears. A sensor with
+	no type at all is nobody's to hide and always passes.
+	"""
+	if not ALLOWED_TYPES:
+		return True
+	label = frappe.utils.cstr(row.get("sensor_type") or "").strip().lower()
+	return not label or label in ALLOWED_TYPES
+
+
 # ── end of the shared location block ─────────────────────────────────────────
 
 sensor = arg("sensor")
@@ -197,7 +230,9 @@ if not docname:
 	frappe.throw("No sensor called " + sensor + ".")
 
 start = frappe.utils.cint(arg("start")) or 0
-page_length = frappe.utils.cint(arg("page_length", "20")) or 20
+# The app method's DEFAULT_LOCATION_HISTORY_PAGE_LENGTH / MAX_…, so an
+# unpaged call returns the same run of rows whichever layer answers it.
+page_length = frappe.utils.cint(arg("page_length", "50")) or 50
 if page_length > 200:
 	page_length = 200
 
@@ -220,7 +255,15 @@ if not UNRESTRICTED:
 	if granted and docname not in granted:
 		frappe.throw("You do not have access to sensor " + sensor, frappe.PermissionError)
 
-out = {"rows": [], "total": 0, "supported": False, "sensor": location_row(current)}
+out = {
+	"sensor": docname,
+	"sensor_name": current.get("sensor_name") or docname,
+	"rows": [],
+	"total": 0,
+	"start": start,
+	"page_length": page_length,
+	"supported": False,
+}
 
 if frappe.db.exists("DocType", HISTORY_DOCTYPE):
 	hmeta = frappe.get_meta(HISTORY_DOCTYPE)

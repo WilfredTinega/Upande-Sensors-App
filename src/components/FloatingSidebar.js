@@ -12,6 +12,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { Skeleton } from './Skeleton';
 import { useDashboard } from '../context/DashboardContext';
@@ -27,15 +28,24 @@ import { font } from '../theme';
  *
  * Measuring the rendered text would be circular — the rows can only lay out
  * once the panel has a width — so this estimates from character count at the
- * row's font size. Poppins at 14pt averages ~7.6px per character; the estimate
- * is deliberately generous and then clamped, so a wrong guess costs a little
- * slack rather than a clipped name.
+ * row's font size. Poppins at the rows' 16pt averages ~8.7px per character;
+ * the estimate is deliberately generous and then clamped, so a wrong guess
+ * costs a little slack rather than a clipped name. It tracks the row's font
+ * size: shrink one without the other and long names start truncating.
  */
-const CHAR_WIDTH = 7.6;
+const CHAR_WIDTH = 8.7;
 /** Accent bar, gaps, tick, row padding and the panel's own padding. */
 const ROW_CHROME = 92;
 const MIN_FRACTION = 0.5;
-const MAX_FRACTION = 0.86;
+/**
+ * Never past this, so there is always a strip of backdrop left to tap.
+ *
+ * Closing by tapping outside is the gesture everyone tries first, and at 0.86
+ * a long dashboard name left about 50 points of it on a narrow phone — a
+ * target most thumbs miss, which reads as "tapping outside does nothing"
+ * rather than "you missed". A name too long for the panel ellipsises instead.
+ */
+const MAX_FRACTION = 0.78;
 
 function panelWidthFor(labels, screenWidth) {
   const longest = labels.reduce((n, l) => Math.max(n, String(l || '').length), 0);
@@ -50,6 +60,7 @@ function panelWidthFor(labels, screenWidth) {
  * drawer is conventionally opened from.
  */
 export function SidebarToggle() {
+  const t = useTheme();
   const { openSidebar, activeTab } = useDashboard();
 
   return (
@@ -66,16 +77,13 @@ export function SidebarToggle() {
       })}
     >
       {/*
-        The logo exactly as supplied — arrow, ring and white disc — not the
-        arrow-only derivative used for the launcher icon, and untinted. It
-        carries its own light background, so it stays legible on the dark theme
-        without needing a tile behind it.
+        The menu glyph, not the Upande logo: this is a control, and a brand mark
+        used as one says "here is who made the app" where it needs to say "the
+        dashboards are behind here". Three plain bars are what a phone user
+        already reads as "opens a menu" — which is the one thing the logo never
+        managed to say.
       */}
-      <Image
-        source={require('../../assets/upande-logo.png')}
-        style={{ width: 28, height: 28 }}
-        resizeMode="contain"
-      />
+      <MaterialIcons name="menu" size={26} color={t.textPrimary} />
     </Pressable>
   );
 }
@@ -117,9 +125,25 @@ function TabRow({ tab }) {
           backgroundColor: isActive ? t.accent : 'transparent',
         }}
       />
+      {/*
+        Full ink, at heading size. `textPrimary` is #0b0b0b on light and pure
+        white on dark, so the colour was never grey — the 14pt 500 weight was
+        what read as grey beside the active row. 16pt, and 600 for the inactive
+        rows, puts every dashboard in the same ink and leaves the accent bar and
+        the tick to say which one is current.
+      */}
       <Text
         numberOfLines={1}
-        style={[type.body, { color: t.textPrimary, fontWeight: isActive ? '700' : '500', fontFamily: isActive ? font('700') : font('500'), flex: 1 }]}
+        style={[
+          type.heading,
+          {
+            fontSize: 16,
+            color: t.textPrimary,
+            fontWeight: isActive ? '700' : '600',
+            fontFamily: isActive ? font('700') : font('600'),
+            flex: 1,
+          },
+        ]}
       >
         {tab.label}
       </Text>
@@ -135,14 +159,7 @@ function TabRow({ tab }) {
  */
 export function FloatingSidebar() {
   const t = useTheme();
-  const {
-    sidebarOpen,
-    closeSidebar,
-    tabs,
-    configLoading,
-    configError,
-    dashboardTitle,
-  } = useDashboard();
+  const { sidebarOpen, closeSidebar, tabs, configLoading, configError } = useDashboard();
 
   const { user, baseUrl } = useAuth();
   // Measured rather than a fixed 44pt guess, so the header clears the status
@@ -249,8 +266,11 @@ export function FloatingSidebar() {
                 style={{ width: 38, height: 38 }}
                 resizeMode="contain"
               />
+              {/* The app's own name, not Sensor Settings' dashboard_title: that
+                  field is per-server and is often set to a site name, which does
+                  not belong in the brand lockup beside the logo. */}
               <Text numberOfLines={2} style={[type.title, { color: t.textPrimary, flex: 1 }]}>
-                {dashboardTitle}
+                Upande Sensors
               </Text>
             </View>
 

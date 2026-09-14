@@ -30,6 +30,16 @@ import { reportReachable, reportUnreachable, resetNetworkState } from './network
 
 export const NO_BASE_URL = '';
 
+/**
+ * Statuses the reverse proxy in front of a Frappe Cloud bench answers with
+ * while its workers are restarting for a deploy — never something the Frappe
+ * app itself returns for an ordinary error (those come back as a JSON body,
+ * usually a 500 with `exc_type`). A plain "Request failed (502)." on every
+ * screen at once, right as a release goes out, reads like the app broke; it is
+ * the one signature that reliably means "the site is mid-deploy, not down."
+ */
+const GATEWAY_STATUSES = new Set([502, 503, 504]);
+
 export class FrappeError extends Error {
   constructor(message, { status, excType, raw, kind } = {}) {
     super(message);
@@ -92,6 +102,14 @@ export class FrappeError extends Error {
    */
   get isMissingEndpoint() {
     return /Failed to get method for command/i.test(this.message || '');
+  }
+
+  /**
+   * A gateway-level 502/503/504 with no Frappe JSON body — the site's bench is
+   * restarting for a deploy, not broken. See `GATEWAY_STATUSES`.
+   */
+  get isDeploying() {
+    return this.kind === 'deploying';
   }
 }
 
@@ -326,13 +344,22 @@ export class FrappeClient {
     }
 
     if (!response.ok) {
+      // A gateway status with no parsed JSON body is the proxy talking, not
+      // the Frappe app — that combination is what a mid-deploy bench restart
+      // looks like, and gets its own message rather than the generic one.
+      const deploying = GATEWAY_STATUSES.has(response.status) && !payload;
       const message =
         extractServerMessage(payload) ||
-        (response.status === 404 ? 'Endpoint not found on this instance.' : `Request failed (${response.status}).`);
+        (deploying
+          ? 'Deploying an update to the server. This usually takes a minute or two.'
+          : response.status === 404
+            ? 'Endpoint not found on this instance.'
+            : `Request failed (${response.status}).`);
       throw new FrappeError(message, {
         status: response.status,
         excType: payload?.exc_type,
         raw: payload ?? text,
+        kind: deploying ? 'deploying' : undefined,
       });
     }
 

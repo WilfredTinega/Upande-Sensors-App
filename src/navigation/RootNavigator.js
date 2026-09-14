@@ -1,8 +1,9 @@
 import React from 'react';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import { ActivityIndicator, AppState, Pressable, View, useWindowDimensions } from 'react-native';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 
 import { ChartsScreen } from '../screens/ChartsScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
@@ -13,7 +14,7 @@ import { ReadingsScreen } from '../screens/ReadingsScreen';
 import { RouteHistoryScreen } from '../screens/RouteHistoryScreen';
 import { SensorDetailScreen } from '../screens/SensorDetailScreen';
 import { SensorLocationScreen } from '../screens/SensorLocationScreen';
-import { SensorMapAddLocationButton, SensorMapRefreshButton, SensorMapScreen } from '../screens/SensorMapScreen';
+import { SensorMapScreen } from '../screens/SensorMapScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { OfflineToast } from '../components/OfflineToast';
 import { FloatingSidebar, SidebarToggle } from '../components/FloatingSidebar';
@@ -25,17 +26,17 @@ import {
   DashboardHeaderTitle,
   HeaderAccountControls,
   HeaderSiteControls,
-  HomeHeaderTitle,
+  HeaderSiteTitle,
 } from '../components/HeaderControls';
 import {
   NOTIFICATIONS_ROUTE,
   SENSOR_DETAIL_ROUTE,
   SENSOR_LOCATION_ROUTE,
   SENSOR_MAP_ROUTE,
+  goToHome,
   goToLive,
   leaveNotifications,
   leaveSensorLocation,
-  leaveSensorMap,
   navigationRef,
   setCurrentRoute,
 } from './ref';
@@ -50,7 +51,6 @@ import { font } from '../theme';
 const Tab = createBottomTabNavigator();
 
 const ICONS = {
-  Home: ['home', 'home-outline'],
   Live: ['pulse', 'pulse-outline'],
   // Readings is not here: its three bars are drawn by hand in TabIcons.js,
   // because neither Ionicons three-bar glyph matches the weight of the rest.
@@ -58,6 +58,7 @@ const ICONS = {
   // line reads as a stray squiggle, and bars are what a chart looks like
   // from across the room.
   Dashboard: ['bar-chart', 'bar-chart-outline'],
+  [SENSOR_MAP_ROUTE]: ['map', 'map-outline'],
   Account: ['person-circle', 'person-circle-outline'],
 };
 
@@ -69,13 +70,6 @@ const ICONS = {
  * the screens people use all day. The tab bar is now five destinations that all
  * behave the same way, and the confirmation lives next to the account it ends.
  */
-
-/**
- * Screens the dashboard-tab sidebar applies to. Home is deliberately not one
- * of them: its dashboards grid IS the tab list, so an opener there would offer
- * the same choice twice.
- */
-const SIDEBAR_ROUTES = new Set(['Live', 'Readings', 'Dashboard']);
 
 /** Screens whose data is scoped by the selected site. */
 const SITE_FILTER_ROUTES = new Set([
@@ -102,10 +96,14 @@ const SITE_FILTER_ROUTES = new Set([
  */
 const UNTRACKED_USER = 'Administrator';
 
+/** Away longer than this and reopening the app is a fresh visit, not a glance. */
+const RESUME_HOME_AFTER_MS = 60 * 1000;
+
 function SignedInApp() {
   const t = useTheme();
   const { user } = useAuth();
   const { available: updateAvailable } = useUpdate();
+  const { width } = useWindowDimensions();
 
   /**
    * Enabled during render, not in an effect.
@@ -120,6 +118,33 @@ function SignedInApp() {
   // is recording; only the framework's queued route fills that in itself.
   setRouteHistoryEnabled(!!user?.name && user.name !== UNTRACKED_USER, user?.name);
   React.useEffect(() => () => setRouteHistoryEnabled(false), []);
+
+  /**
+   * Opening the app lands on Home, not on whichever screen was left open.
+   *
+   * A cold start already does — the navigator's `initialRouteName` — but
+   * Android keeps the process alive, so coming back to the app hours later
+   * resumed straight onto a screen from the last session. Only after a real
+   * absence, though: switching out for ten seconds to copy something and being
+   * yanked off the screen you were reading is worse than the problem.
+   *
+   * A tapped push still wins. It brings the app to the foreground, which fires
+   * this, and THEN delivers the response that opens Notifications — later, so
+   * last.
+   */
+  React.useEffect(() => {
+    let leftAt = 0;
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') {
+        leftAt = leftAt || Date.now();
+        return;
+      }
+      const away = leftAt ? Date.now() - leftAt : 0;
+      leftAt = 0;
+      if (away >= RESUME_HOME_AFTER_MS) goToHome();
+    });
+    return () => sub.remove();
+  }, []);
 
   const onRouteChange = () => {
     const current = navigationRef.getCurrentRoute();
@@ -183,19 +208,59 @@ function SignedInApp() {
                   fontFamily: font('700'),
                 },
                 headerShadowVisible: false,
-                // Only the data screens are scoped by a dashboard tab, so only
-                // they get the opener — a list icon on Account would open a
-                // sidebar that changes nothing on screen.
-                headerLeft: SIDEBAR_ROUTES.has(route.name) ? () => <SidebarToggle /> : undefined,
-                // The site-scoped screens carry the filter in the header,
-                // beside the sidebar button, rather than each repeating it in a
-                // filters card — and the alerts bell to its left, on every
-                // screen that has a header of its own to put it in.
+                // Everywhere but Home, whose dashboards grid IS the tab list —
+                // an opener there would offer the same choice twice. Screens
+                // that set their own headerLeft (a back chevron out of a task)
+                // keep it: their override wins over this.
+                headerLeft: route.name === 'Home' ? undefined : () => <SidebarToggle />,
+                // The site-scoped screens carry the filter in the header rather
+                // than each repeating it in a filters card — as the TITLE now,
+                // centred, with the screen's own name under it; the right side
+                // is the alerts bell alone.
+                // Centred only where the title is the two-line site block. A
+                // plain one-line title (Account, Notifications, App activity)
+                // keeps the platform's own alignment.
+                headerTitleAlign: SITE_FILTER_ROUTES.has(route.name) ? 'center' : 'left',
                 headerRight: SITE_FILTER_ROUTES.has(route.name)
                   ? () => <HeaderSiteControls />
                   : route.name === 'Account'
                     ? () => <HeaderAccountControls />
                     : undefined,
+                /**
+                 * Room for the two-line block, and as wide as it can be.
+                 *
+                 * React Navigation budgets the title as "the width, less a flat
+                 * 52 points for whatever is on the right" — written for a single
+                 * icon. Here the title is the site name AND the screen name, and
+                 * the second of those is aligned to the block's left edge, so
+                 * the block has to span most of the bar for that edge to be the
+                 * bar's. What is left goes to the sidebar button and the bell.
+                 */
+                headerTitleContainerStyle: SITE_FILTER_ROUTES.has(route.name)
+                  ? { flexGrow: 1, flexBasis: 0, maxWidth: width }
+                  : undefined,
+                /**
+                 * Let the two side slots hug their buttons — but only where the
+                 * title is the two-line block that has to span the bar.
+                 *
+                 * Both are `flexGrow: 1, flexBasis: 0` by default, so with a
+                 * title that also grows, the three split the bar in thirds and
+                 * the title sits in the middle third — which is why a line
+                 * "aligned left" inside it still looked centred. Hugging them
+                 * leaves everything between to the title, whose own growth then
+                 * pushes the bell back out to the right edge.
+                 *
+                 * Everywhere else the default has to stand: with a plain
+                 * left-aligned title that does NOT grow, a hugged right slot
+                 * has nothing pushing it, so the bell and the theme switch end
+                 * up bunched against the title on the left.
+                 */
+                headerLeftContainerStyle: SITE_FILTER_ROUTES.has(route.name)
+                  ? { flexGrow: 0, flexBasis: 'auto' }
+                  : undefined,
+                headerRightContainerStyle: SITE_FILTER_ROUTES.has(route.name)
+                  ? { flexGrow: 0, flexBasis: 'auto' }
+                  : undefined,
                 tabBarActiveTintColor: t.accent,
                 tabBarInactiveTintColor: t.textMuted,
                 tabBarStyle: { backgroundColor: t.surface, borderTopColor: t.border },
@@ -248,6 +313,17 @@ function SignedInApp() {
                   if (route.name === 'Readings') {
                     return <ReadingsTabIcon size={size ?? 24} color={color} />;
                   }
+                  // Material's house rather than Ionicons', to match the menu
+                  // glyph the sidebar opener uses.
+                  if (route.name === 'Home') {
+                    return (
+                      <MaterialCommunityIcons
+                        name={focused ? 'home' : 'home-outline'}
+                        size={size ?? 24}
+                        color={color}
+                      />
+                    );
+                  }
                   const [active, inactive] = ICONS[route.name] || ICONS.Live;
                   return (
                     <Ionicons name={focused ? active : inactive} size={size ?? 24} color={color} />
@@ -267,7 +343,10 @@ function SignedInApp() {
                 // The mark instead of the word — the tab bar's house glyph
                 // already says "Home", so the title is free to be the app.
                 options={{
-                  headerTitle: () => <HomeHeaderTitle />,
+                  // Nothing: the greeting card below states the site and is the
+                  // filter for it, so a header saying the same thing — plus the
+                  // word the highlighted tab already says — is repetition.
+                  headerTitle: () => null,
                   tabBarLabel: 'Home',
                   tabBarAccessibilityLabel: 'Home tab',
                 }}
@@ -276,7 +355,7 @@ function SignedInApp() {
                 name="Live"
                 component={DashboardScreen}
                 options={{
-                  headerTitle: 'Live readings',
+                  headerTitle: () => <HeaderSiteTitle title="Live readings" />,
                   tabBarLabel: 'Live',
                   tabBarAccessibilityLabel: 'Live readings tab',
                 }}
@@ -285,7 +364,7 @@ function SignedInApp() {
                 name="Readings"
                 component={ReadingsScreen}
                 options={{
-                  headerTitle: 'Sensor readings',
+                  headerTitle: () => <HeaderSiteTitle title="Sensor readings" />,
                   tabBarLabel: 'Readings',
                   tabBarAccessibilityLabel: 'Sensor readings tab',
                 }}
@@ -369,16 +448,16 @@ function SignedInApp() {
                   tabBarItemStyle: { display: 'none' },
                 }}
               />
-              {/* Reached from Home's quick links, a sensor's detail screen or the
-                  map's empty state. Hidden like the rest: setting coordinates is
-                  a task — stand at the sensor, scan, save — not a place, and the
-                  back chevron returns to wherever the task was started from.
-                  The header's site filter scopes its picker. */}
+              {/* Reached from the sensor list's header or empty state, or a
+                  sensor's detail screen. Hidden like the rest: setting
+                  coordinates is a task — stand at the sensor, scan, save — not a
+                  place, and the back chevron returns to wherever the task was
+                  started from. The header's site filter scopes its picker. */}
               <Tab.Screen
                 name={SENSOR_LOCATION_ROUTE}
                 component={SensorLocationScreen}
                 options={{
-                  headerTitle: 'Set coordinates',
+                  headerTitle: () => <HeaderSiteTitle title="Set coordinates" />,
                   headerLeft: () => (
                     <Pressable
                       accessibilityRole="button"
@@ -399,39 +478,17 @@ function SignedInApp() {
                   tabBarItemStyle: { display: 'none' },
                 }}
               />
-              {/* Every positioned sensor on a map. The refresh icon sits beside
-                  the site filter because the map is a WebView: a pull-to-refresh
-                  gesture would be the map's own pan. */}
+              {/* Every positioned sensor on a map, and where a sensor's
+                  coordinates are added. The add and refresh controls sit in the
+                  screen's own counts row, not the header. */}
               <Tab.Screen
                 name={SENSOR_MAP_ROUTE}
                 component={SensorMapScreen}
                 options={{
-                  headerTitle: 'Sensor list',
-                  headerLeft: () => (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Back"
-                      onPress={leaveSensorMap}
-                      hitSlop={10}
-                      style={({ pressed }) => ({
-                        paddingLeft: 16,
-                        paddingRight: 8,
-                        paddingVertical: 8,
-                        opacity: pressed ? 0.6 : 1,
-                      })}
-                    >
-                      <Ionicons name="chevron-back" size={24} color={t.textPrimary} />
-                    </Pressable>
-                  ),
-                  headerRight: () => (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'stretch' }}>
-                      <SensorMapAddLocationButton />
-                      <SensorMapRefreshButton />
-                      <HeaderSiteControls />
-                    </View>
-                  ),
-                  tabBarButton: () => null,
-                  tabBarItemStyle: { display: 'none' },
+                  headerTitle: () => <HeaderSiteTitle title="Sensor list" />,
+                  tabBarLabel: 'Sensor list',
+                  tabBarAccessibilityLabel: 'Sensor list tab',
+                  headerRight: () => <HeaderSiteControls />,
                 }}
               />
               <Tab.Screen

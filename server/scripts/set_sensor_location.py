@@ -22,8 +22,14 @@
 # doctype exists, with the position it replaced — so a sensor moved by mistake
 # can be put back, and the desk can see who set what and from which phone. On
 # a site without the doctype the coordinates are still written and
-# `history_name` is null; the five optional location_* columns follow the same
-# rule (see the shared block).
+# `history_name` is null; the optional location_* columns follow the same rule
+# (see the shared block).
+#
+# `physical_location` is CLEARED rather than resolved: naming a place needs
+# upande_sensors.api.places, which this sandbox cannot import. The app method
+# resolves it; here the Desk form's fill_physical_location or the migrate
+# backfill names the new spot, and until one of them does the field is blank
+# instead of still naming the spot the sensor was moved from.
 #
 # Same response shape as `upande_sensors.api.mobile.set_sensor_location`: the
 # updated `sensors_for_location` row, plus `history_name` and `previous`.
@@ -57,6 +63,12 @@ LOCATION_FIELDS = [
 	"location_updated_on",
 	"location_updated_by",
 	"location_source",
+	# The reverse-geocoded place name. Read here so the app can show it; this
+	# script cannot WRITE it the way the app method does (naming a place needs
+	# upande_sensors.api.places, which the Server Script sandbox cannot import),
+	# so on a site running the scripts it stays whatever the Desk form or the
+	# migrate backfill last resolved.
+	"physical_location",
 ]
 HISTORY_DOCTYPE = "Sensor Location History"
 
@@ -164,6 +176,9 @@ def location_row(row):
 		"location_updated_by": (row.get("location_updated_by") or None)
 		if SENSOR_META.has_field("location_updated_by")
 		else None,
+		"physical_location": (row.get("physical_location") or None)
+		if SENSOR_META.has_field("physical_location")
+		else None,
 		"has_location": ok,
 	}
 
@@ -190,7 +205,36 @@ def sensor_scope_filters(site, allowed_sites):
 	return filters
 
 
+# Sensor Types this account is scoped to, lowercased; empty means unscoped.
+# Only a non-empty grant restricts — the same convention as the Sensor grants
+# above, and the same one `upande_sensors.api.permitted_types` follows.
+ALLOWED_TYPES = []
+if not UNRESTRICTED:
+	for granted_type in scoped("Sensor Type"):
+		ALLOWED_TYPES.append(frappe.utils.cstr(granted_type).strip().lower())
+
+
+def type_allowed(row):
+	"""May this account see the sensor's registered type?
+
+	An account scoped to Temperature is shown Temperature everywhere in the
+	app — every chart, list and map — so the coordinates picker and the map
+	must not be the one place a Pressure sensor still appears. A sensor with
+	no type at all is nobody's to hide and always passes.
+	"""
+	if not ALLOWED_TYPES:
+		return True
+	label = frappe.utils.cstr(row.get("sensor_type") or "").strip().lower()
+	return not label or label in ALLOWED_TYPES
+
+
 # ── end of the shared location block ─────────────────────────────────────────
+
+# What this write stamps on Sensor.location_source and the history row. The
+# same string `upande_sensors.api.mobile.LOCATION_SOURCE_APP` writes, so one
+# site's rows do not say "Mobile GPS" where another's say "app" purely because
+# of which of the two layers answered the phone.
+LOCATION_SOURCE = "app"
 
 if frappe.request and frappe.request.method != "POST":
 	frappe.throw("Coordinates must be set with POST; a GET is rolled back.", frappe.PermissionError)
@@ -222,8 +266,27 @@ raw_lat = arg("latitude")
 raw_lng = arg("longitude")
 if not raw_lat or not raw_lng:
 	frappe.throw("Both latitude and longitude are needed.")
-latitude = frappe.utils.flt(raw_lat)
-longitude = frappe.utils.flt(raw_lng)
+
+
+def coordinate(text, label):
+	"""A coordinate from the client, refusing junk rather than rounding it.
+
+	`frappe.utils.flt("abc")` is 0.0, which is a real latitude — a garbled
+	value would be written as a point on the equator instead of being sent
+	back for a retake. The app method refuses it the same way.
+	"""
+	try:
+		number = float(text)
+	except ValueError:
+		frappe.throw(label + " must be a number, not " + text + ".")
+	# NaN would clear every bounds check below by failing all of them.
+	if number != number:
+		frappe.throw(label + " must be a number, not " + text + ".")
+	return number
+
+
+latitude = coordinate(raw_lat, "Latitude")
+longitude = coordinate(raw_lng, "Longitude")
 if latitude == 0 and longitude == 0:
 	frappe.throw("0, 0 is not a sensor position; the GPS gave no fix.")
 if latitude < -90 or latitude > 90:
@@ -237,6 +300,8 @@ if arg("accuracy_m"):
 	if accuracy_m < 0:
 		frappe.throw("Accuracy cannot be negative.")
 samples = frappe.utils.cint(arg("samples")) or None
+if samples is not None and samples < 0:
+	frappe.throw("GPS fixes averaged cannot be negative.")
 device = arg("device")[:140]
 
 # ── Scope ────────────────────────────────────────────────────────────────────
@@ -272,16 +337,26 @@ now_str = frappe.utils.now()
 values = {"latitude": latitude, "longitude": longitude}
 # Only the columns this site has: writing to one it lacks is a 500, and the
 # coordinates themselves matter more than their provenance.
+# 0, never None: these are NOT NULL Float/Int columns and `db.set_value`
+# UPDATEs them raw, without the casting a document save would do — a phone
+# whose GPS reported no accuracy used to get a 500 here. They read back as
+# null anyway (see optional_float).
 if SENSOR_META.has_field("location_accuracy_m"):
-	values["location_accuracy_m"] = accuracy_m
+	values["location_accuracy_m"] = accuracy_m or 0
 if SENSOR_META.has_field("location_samples"):
-	values["location_samples"] = samples
+	values["location_samples"] = samples or 0
 if SENSOR_META.has_field("location_updated_on"):
 	values["location_updated_on"] = now_str
 if SENSOR_META.has_field("location_updated_by"):
 	values["location_updated_by"] = SESSION_USER
 if SENSOR_META.has_field("location_source"):
-	values["location_source"] = "Mobile GPS"
+	values["location_source"] = LOCATION_SOURCE
+if SENSOR_META.has_field("physical_location"):
+	# The place name cannot be RESOLVED here — that needs upande_sensors.api.
+	# places, which the sandbox cannot import — but it must not be left saying
+	# where the sensor USED to be. Cleared, for the Desk form's
+	# fill_physical_location or the migrate backfill to name the new spot.
+	values["physical_location"] = ""
 
 # db.set_value rather than a document save: the Sensor controller's own
 # validation is about commissioning (dev EUI, application key), none of which
@@ -298,14 +373,16 @@ if frappe.db.exists("DocType", HISTORY_DOCTYPE):
 		"sensor_site": sensor_site,
 		"latitude": latitude,
 		"longitude": longitude,
-		"accuracy_m": accuracy_m,
-		"samples": samples,
-		"source": "Mobile GPS",
+		"accuracy_m": accuracy_m or 0,
+		"samples": samples or 0,
+		"source": LOCATION_SOURCE,
 		"device": device or None,
 		"user": SESSION_USER,
 		"recorded_at": now_str,
-		"previous_latitude": previous["latitude"] if previous else None,
-		"previous_longitude": previous["longitude"] if previous else None,
+		# 0,0 when the sensor had no coordinates before: the columns are NOT
+		# NULL, and 0,0 is how the app method records "no previous fix" too.
+		"previous_latitude": previous["latitude"] if previous else 0,
+		"previous_longitude": previous["longitude"] if previous else 0,
 	}
 	entry = {"doctype": HISTORY_DOCTYPE}
 	for key in wanted:

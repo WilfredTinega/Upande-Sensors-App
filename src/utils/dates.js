@@ -69,6 +69,15 @@ export function ageInMinutes(value) {
  */
 export const RANGES = [
   { key: 'today', label: 'Today', days: 1, interval: 'hourly' },
+  /**
+   * `hours` is a rolling window, and the only thing here that is not a whole
+   * number of calendar days: "Today" is midnight to now, which at 08:00 is
+   * eight hours of chart. 24h fetches two days so the window can reach back
+   * across midnight, then keeps the last 24 hourly buckets (`lastHours`).
+   * Without that cut it would BE two days, and say 24h.
+   */
+  { key: '24h', label: '24h', days: 2, interval: 'hourly', hours: 24 },
+  { key: '3d', label: '3 days', days: 3, interval: 'hourly' },
   { key: '7d', label: '7 days', days: 7, interval: 'hourly' },
   { key: '15d', label: '15 days', days: 15, interval: 'daily' },
   { key: '30d', label: '30 days', days: 30, interval: 'daily' },
@@ -85,6 +94,27 @@ export function rangeToDates(rangeKey) {
     interval: range.interval,
     label: range.label,
     days: range.days,
+    hours: range.hours || null,
+  };
+}
+
+/**
+ * Keep only the last `hours` buckets of an hourly series.
+ *
+ * Applied AFTER the future trim, never before: the server fills buckets to the
+ * end of `dateTo`, so counting back 24 from the raw end would land on midnight
+ * tonight and give a window mostly in the future. Counting back from the last
+ * bucket that has actually happened is what makes it the last 24 hours.
+ *
+ * Every range that sets `hours` is hourly, so one bucket is one hour and the
+ * count is the cut — there is no sub-hour interval in this app to scale for.
+ */
+export function lastHours(labels = [], series = [], hours) {
+  if (!hours || labels.length <= hours) return { labels, series };
+  const start = labels.length - hours;
+  return {
+    labels: labels.slice(start),
+    series: series.map((s) => ({ ...s, values: (s.values || []).slice(start) })),
   };
 }
 

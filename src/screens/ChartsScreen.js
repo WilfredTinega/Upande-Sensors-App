@@ -28,7 +28,7 @@ import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { font } from '../theme';
-import { RANGES, fullTimestamp, rangeToDates, trimFutureSeries } from '../utils/dates';
+import { RANGES, fullTimestamp, lastHours, rangeToDates, trimFutureSeries } from '../utils/dates';
 
 /** Chart bucket width for a single day. `sensor_dashboard` groups by minutes. */
 const BUCKET_MINS = 20;
@@ -91,7 +91,7 @@ function ChartsTabScreen() {
   /** Measured, so the plot fills whatever is left above the tab bar. */
   const [chartHeight, setChartHeight] = useState(0);
 
-  const { dateFrom, dateTo, interval, days } = useMemo(() => rangeToDates(rangeKey), [rangeKey]);
+  const { dateFrom, dateTo, interval, days, hours } = useMemo(() => rangeToDates(rangeKey), [rangeKey]);
 
   /**
    * Beyond a day, `sensor_dashboard` answers from the hourly rollup table
@@ -204,11 +204,13 @@ function ChartsTabScreen() {
     // stat tiles below are built from this same array, so dropping them here
     // takes them off the tiles as well as off the chart, which is the point:
     // a tile for a line that isn't drawn is worse than either.
-    return trimFutureSeries(
+    // Future buckets go first, then the rolling window — see `lastHours`.
+    const trimmed = trimFutureSeries(
       trend.data.labels || [],
       derived ? withDerivedMeasures(series) : series,
     );
-  }, [trend.data, unitForType, derived]);
+    return lastHours(trimmed.labels, trimmed.series, hours);
+  }, [trend.data, unitForType, derived, hours]);
 
   /**
    * Sensor names for the picker.
@@ -346,27 +348,39 @@ function ChartsTabScreen() {
         <Skeleton height={38} radius={radius.pill} style={{ marginBottom: spacing.sm }} />
       ) : (
         /* No card around the filters: two self-describing controls need no
-           container, and the panel was taking height from the chart. The
-           ranges get their own row — five of them beside the sensor picker
-           left each one too narrow to read. */
-        <View style={{ marginBottom: spacing.sm, gap: spacing.xs }}>
-          <SelectField
-            compact
-            value={sensorName}
-            options={availableNames}
-            onChange={setSensorName}
-            allowClear
-            clearLabel="All sensors"
-            placeholder={names.loading || filtersLocked ? 'Loading…' : 'All sensors'}
-            disabled={names.loading || filtersLocked}
-          />
+           container, and the panel was taking height from the chart.
+           One line, sensor first, scrolling sideways when it runs out — the
+           two used to be stacked because five ranges sharing a fixed row
+           beside the picker left each one too narrow to read. Scrolling is
+           what buys them their own width back without a second row. */
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ flexGrow: 0, marginBottom: spacing.sm }}
+          contentContainerStyle={{ alignItems: 'center', gap: spacing.xs }}
+        >
+          {/* A width of its own: `compact` makes the field flex, and inside a
+              row that scrolls there is no width to take a share of. */}
+          <View style={{ width: 180 }}>
+            <SelectField
+              compact
+              value={sensorName}
+              options={availableNames}
+              onChange={setSensorName}
+              allowClear
+              clearLabel="All sensors"
+              placeholder={names.loading || filtersLocked ? 'Loading…' : 'All sensors'}
+              disabled={names.loading || filtersLocked}
+            />
+          </View>
           <ChoiceButtons
+            hug
             disabled={filtersLocked}
             options={RANGES.map((r) => ({ label: r.label, value: r.key }))}
             value={rangeKey}
             onChange={setRangeKey}
           />
-        </View>
+        </ScrollView>
       )}
 
       {!showSkeleton && trend.error ? <ErrorView error={trend.error} onRetry={refresh} /> : null}
@@ -383,10 +397,7 @@ function ChartsTabScreen() {
         for one site, and says so plainly rather than silently showing nothing.
       */}
       {!showSkeleton && !trend.error && site === null ? (
-        <EmptyState
-          title="Pick a site to see its dashboard"
-          message="A chart averages readings into one line, and mixing sites together would blend unrelated farms into a single misleading number. Choose one site from the filter above."
-        />
+        <EmptyState title="Pick a site to see its dashboard" />
       ) : null}
 
       {!showSkeleton && !trend.error && site !== null ? (
@@ -542,10 +553,11 @@ function ChartsTabScreen() {
               </View>
             </>
           ) : (
-            <EmptyState
-              title="No readings in this range"
-              message={`Nothing recorded at ${site || 'this site'} between ${dateFrom} and ${dateTo}. Try a wider range or a different sensor.`}
-            />
+            // Centred in the space the chart would have taken, so the card
+            // keeps its shape whether or not there is anything to draw.
+            <View style={{ minHeight: 220, alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={[type.body, { color: t.textMuted }]}>No data</Text>
+            </View>
           )}
         </Card>
       ) : null}
