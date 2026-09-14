@@ -96,6 +96,7 @@ const APP_ONLY = {
   alertsCount: 'upande_sensors.api.mobile.alerts_count',
   registerInstall: 'upande_sensors.api.mobile.register_install',
   installs: 'upande_sensors.api.mobile.installs',
+  locationCoverage: 'upande_sensors.api.mobile.location_coverage',
 };
 
 const LEGACY = {
@@ -1139,6 +1140,20 @@ export function getSensorMap({ site, staleMinutes } = {}, signal) {
       { signal },
     ),
   );
+}
+
+/**
+ * How many of this account's sensors have coordinates: `{ total,
+ * with_coordinates, without_coordinates }`. Registry-only (no readings), for
+ * the Home screen's Sensor list tile.
+ *
+ * App method only — there is no Server Script link in the chain, so this
+ * rethrows `isMissingEndpoint` untouched and the tile hides the coordinate
+ * counts on a server that predates it, the same as `getDashboardHealth` did
+ * before it grew a script fallback.
+ */
+export function getLocationCoverage(site, signal) {
+  return client.call(APP_ONLY.locationCoverage, { site: site || undefined }, { signal });
 }
 
 /* ── Account names ───────────────────────────────────────────────────────── */

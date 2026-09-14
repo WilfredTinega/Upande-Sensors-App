@@ -14,18 +14,12 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Card, EmptyState, SectionTitle, StatusChip } from '../components/ui';
 import { Skeleton } from '../components/Skeleton';
 import { TTL_LIVE, cacheKey, invalidate } from '../api/cache';
-import { getDashboardHealth } from '../api/endpoints';
+import { getDashboardHealth, getLocationCoverage } from '../api/endpoints';
 import { latestStamp, liveKey, loadLiveForSite, siteKey } from '../api/liveSite';
 import { useAuth } from '../context/AuthContext';
 import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
-import {
-  goToAccount,
-  goToLive,
-  goToReadings,
-  goToSensorLocation,
-  goToSensorMap,
-} from '../navigation/ref';
+import { goToLive, goToSensorLocation, goToSensorMap } from '../navigation/ref';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { font } from '../theme';
 import { isStale, relativeTime } from '../utils/dates';
@@ -83,6 +77,7 @@ function greeting() {
 /** Shared constants, so a pending query doesn't yield a new object per render. */
 const EMPTY_SENSORS = [];
 const EMPTY_LIVE = {};
+const EMPTY_COVERAGE = { with_coordinates: 0, without_coordinates: 0 };
 
 /**
  * One dashboard's counts out of a `dashboard_health` payload, or null.
@@ -389,23 +384,106 @@ function TabCard({ tab, width, active, onPress, health, healthLoading, showHealt
 /** Icon 36 + gap 8 + title 40 + counts row 18 + card padding 32. */
 const TILE_HEIGHT = 134;
 
-function QuickLink({ icon, label, onPress }) {
+/**
+ * The sensor roster, in one tile: is it reporting (active/stale, the same
+ * numbers `SiteStatusCard` shows) and is it positioned (with/without
+ * coordinates, from `location_coverage`) — the two questions the map and the
+ * coordinates screen each answer, so the tile is the front door to both.
+ *
+ * The whole card opens the sensor list; the "+" is its own target (the
+ * header's own add-coordinates button, repeated here so Home offers the same
+ * shortcut) and stops its own touch from also opening the list underneath it.
+ */
+function SensorListTile({ counts, coverage, coverageLoading, coverageUnsupported, canSet, pending }) {
   const t = useTheme();
+  const rowStyle = {
+    flexDirection: 'row',
+    gap: spacing.md,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: t.border,
+  };
+  const skeletonPair = (key) => (
+    <View key={key} style={{ flex: 1, gap: 6 }}>
+      <Skeleton width="50%" height={20} />
+      <Skeleton width="70%" height={10} />
+    </View>
+  );
+
   return (
     <Pressable
       accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => ({ flex: 1, opacity: pressed ? 0.8 : 1 })}
+      accessibilityLabel="Open the sensor list"
+      onPress={() => goToSensorMap()}
+      style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1, marginBottom: spacing.md })}
     >
-      <Card style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.md }}>
-        <Ionicons name={icon} size={20} color={t.accent} />
-        <Text
-          numberOfLines={1}
-          style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600'), flex: 1 }]}
-        >
-          {label}
-        </Text>
-        <Ionicons name="chevron-forward" size={15} color={t.textMuted} />
+      <Card>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+          <View
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: radius.md,
+              backgroundColor: t.accentSoft,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Ionicons name="map-outline" size={20} color={t.accent} />
+          </View>
+          <Text style={[type.heading, { color: t.textPrimary, flex: 1 }]}>Sensor list</Text>
+          {canSet ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Add a sensor's coordinates"
+              onPress={(event) => {
+                event.stopPropagation();
+                goToSensorLocation();
+              }}
+              hitSlop={8}
+              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1, padding: 2 })}
+            >
+              <Ionicons name="add-circle-outline" size={22} color={t.accent} />
+            </Pressable>
+          ) : null}
+          <Ionicons name="chevron-forward" size={16} color={t.textMuted} />
+        </View>
+
+        <View style={rowStyle}>
+          {pending ? (
+            [0, 1].map(skeletonPair)
+          ) : (
+            <>
+              <Count value={counts.live} label="active" colour={t.status.good} />
+              <Count
+                value={counts.stale}
+                label="stale"
+                colour={counts.stale ? t.status.critical : t.textMuted}
+              />
+            </>
+          )}
+        </View>
+
+        {/* Coordinate coverage needs its own server support (location_coverage
+            is app-only, no Server Script fallback); an older server just gets
+            one row of counts instead of two, not a row of false zeros. */}
+        {coverageUnsupported ? null : (
+          <View style={rowStyle}>
+            {pending || coverageLoading ? (
+              [0, 1].map(skeletonPair)
+            ) : (
+              <>
+                <Count value={coverage.with_coordinates ?? 0} label="with coordinates" colour={t.status.good} />
+                <Count
+                  value={coverage.without_coordinates ?? 0}
+                  label="without coordinates"
+                  colour={coverage.without_coordinates ? t.status.warning : t.textMuted}
+                />
+              </>
+            )}
+          </View>
+        )}
       </Card>
     </Pressable>
   );
@@ -543,6 +621,18 @@ export function HomeScreen() {
   // total wearing a dashboard's name.
   const healthUnsupported = Boolean(health.error?.isMissingEndpoint);
 
+  /**
+   * With/without coordinates, for the Sensor list tile. App-only (no Server
+   * Script fallback), so an older server answers `isMissingEndpoint` and the
+   * tile drops that row rather than showing false zeros.
+   */
+  const coverage = useQuery(
+    sitePending ? null : cacheKey('location_coverage', { site }),
+    () => getLocationCoverage(site),
+    { ttl: TTL_LIVE },
+  );
+  const coverageUnsupported = Boolean(coverage.error?.isMissingEndpoint);
+
   const refresh = useCallback(async () => {
     // Gated on `sitePending`, not `site`: "All sites" is `site === null` once
     // settled, and a pull there must still refresh — it was skipping the
@@ -555,13 +645,15 @@ export function HomeScreen() {
       invalidate(siteKey(site));
       invalidate(liveKey(site));
       invalidate(cacheKey('dashboard_health', { site }));
+      invalidate(cacheKey('location_coverage', { site }));
     }
     await Promise.all([
       !sitePending ? live.refresh() : Promise.resolve(),
       !sitePending && !healthUnsupported ? health.refresh() : Promise.resolve(),
+      !sitePending && !coverageUnsupported ? coverage.refresh() : Promise.resolve(),
       refreshReference(),
     ]);
-  }, [site, sitePending, live, health, healthUnsupported, refreshReference]);
+  }, [site, sitePending, live, health, healthUnsupported, coverage, coverageUnsupported, refreshReference]);
 
   const pending = sitePending || sitesLoading || live.loading;
   const refreshing = live.refreshing;
@@ -648,20 +740,17 @@ export function HomeScreen() {
         </Card>
       )}
 
-      <View style={{ flexDirection: 'row', gap: spacing.md }}>
-        <QuickLink icon="list-outline" label="Readings" onPress={goToReadings} />
-        <QuickLink icon="person-circle-outline" label="Account" onPress={goToAccount} />
-      </View>
-      {/* The map for everyone; the coordinate capture only for an account the
-          server says may write them — a button that ends in "not permitted"
-          is worse than no button. Alone on its row, the map link takes the
-          full width rather than leaving a hole beside it. */}
-      <View style={{ flexDirection: 'row', gap: spacing.md, marginTop: spacing.md }}>
-        <QuickLink icon="map-outline" label="Sensor list" onPress={() => goToSensorMap()} />
-        {appSettings?.can_set_location ? (
-          <QuickLink icon="locate-outline" label="Set coordinates" onPress={() => goToSensorLocation()} />
-        ) : null}
-      </View>
+      {/* Readings and Account are still one tap away — the bottom tab bar and
+          the header's account icon — so dropping their shortcuts here does
+          not strand either screen; it makes room for the roster below. */}
+      <SensorListTile
+        counts={counts}
+        coverage={coverage.data || EMPTY_COVERAGE}
+        coverageLoading={coverage.loading}
+        coverageUnsupported={coverageUnsupported}
+        canSet={Boolean(appSettings?.can_set_location)}
+        pending={pending}
+      />
 
       {supportContact ? <SupportLine contact={supportContact} /> : null}
     </ScrollView>
