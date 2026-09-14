@@ -154,6 +154,25 @@ export function shortTimestamp(value) {
   return text.slice(0, 16);
 }
 
+/**
+ * A duration in seconds as "1d 2h 30m", "45m", "20s" — zero units left out,
+ * nothing at all reads "0m". Mirrors `fmtDur` in the web frontend
+ * (`frontend/src/lib/duration.js`) so a door's open time reads the same on the
+ * phone as on the plan.
+ */
+export function formatDuration(seconds) {
+  const s = Math.max(0, Math.round(Number(seconds) || 0));
+  if (s < 60) return s ? `${s}s` : '0m';
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const parts = [];
+  if (d) parts.push(`${d}d`);
+  if (h) parts.push(`${h}h`);
+  if (m) parts.push(`${m}m`);
+  return parts.join(' ') || '0m';
+}
+
 export function relativeTime(value) {
   const minutes = ageInMinutes(value);
   if (minutes === null) return null;
@@ -170,13 +189,44 @@ export function relativeTime(value) {
 }
 
 /**
+ * The freshness window, settable at runtime.
+ *
+ * The threshold used to be the compile-time constant alone, which made "stale"
+ * mean the same two hours on a cold room reporting every minute and a rain
+ * gauge reporting hourly. Sensor Settings now carries `stale_after_minutes`,
+ * and `DashboardContext` writes it here when the config arrives — so every
+ * `isStale` caller follows the site's own definition without being told. The
+ * constant is the starting value and what an unusable setting falls back to.
+ */
+let staleAfterMinutes = STALE_AFTER_MINUTES;
+
+/**
+ * Apply a site's threshold. Anything that is not a positive finite number —
+ * an older server that returns nothing, a zero, a blank field — resets to the
+ * default rather than being applied: a threshold of 0 would call every reading
+ * stale, and NaN would call none of them, and neither is a setting anyone made.
+ */
+export function setStaleAfterMinutes(minutes) {
+  const n = Number(minutes);
+  staleAfterMinutes = Number.isFinite(n) && n > 0 ? n : STALE_AFTER_MINUTES;
+  return staleAfterMinutes;
+}
+
+export function getStaleAfterMinutes() {
+  return staleAfterMinutes;
+}
+
+/**
  * Is this reading too old to present as current?
  *
  * Unknown and future-dated timestamps both count as stale. Both mean we cannot
  * substantiate "this is live", and for equipment monitoring the honest default
  * when in doubt is to say so rather than to show a confident green light.
+ *
+ * The default threshold is read on every call, not captured at import, so a
+ * setting that arrives after a screen has mounted applies to its next render.
  */
-export function isStale(value, thresholdMinutes = STALE_AFTER_MINUTES) {
+export function isStale(value, thresholdMinutes = getStaleAfterMinutes()) {
   const minutes = ageInMinutes(value);
   if (minutes === null) return true;
   if (minutes < -CLOCK_SKEW_TOLERANCE_MINUTES) return true;

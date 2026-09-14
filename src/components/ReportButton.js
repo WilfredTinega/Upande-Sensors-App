@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { captureScreen } from 'react-native-view-shot';
 
 import { Button, Field, Segmented, SelectField } from './ui';
@@ -28,9 +29,22 @@ import { font } from '../theme';
  * The screenshot is taken *before* the sheet opens — otherwise every report
  * would show the report form rather than the screen being reported.
  */
+/**
+ * Height of the bottom tab bar, so the button can sit above it.
+ *
+ * A constant rather than `useBottomTabBarHeight()`: this component is rendered
+ * as a SIBLING of `NavigationContainer` — that is what lets it float over every
+ * screen and screenshot the screen rather than itself — so it is outside the
+ * navigator's context and the hook is unavailable there. 49 is React
+ * Navigation's own default for the compact Android bar, which is what this app
+ * gets: `tabBarShowLabel` is false, so the bar is icons only.
+ */
+const TAB_BAR_HEIGHT = 49;
+
 export function ReportButton() {
   const t = useTheme();
   const route = useCurrentRoute();
+  const insets = useSafeAreaInsets();
 
   const [open, setOpen] = useState(false);
   const [shot, setShot] = useState(null);
@@ -176,8 +190,22 @@ export function ReportButton() {
         style={({ pressed }) => ({
           position: 'absolute',
           right: spacing.sm,
-          // Vertically centred, clear of both the header and the tab bar.
-          top: '45%',
+          /**
+           * Bottom right, above the tab bar — not the middle of the right edge.
+           *
+           * It used to sit at `top: '45%'`, which on a phone is exactly where
+           * the content is: it landed on the Home grid's right-hand tile and
+           * across the sensor detail summary card, covering the numbers those
+           * cards exist to show. Every screen's scroll content ends with
+           * `paddingBottom: spacing.xxl`, so down here it rests on reserved
+           * empty space at the end of the list rather than on a card, and it is
+           * out of the reading path on the way down.
+           *
+           * The safe-area inset is added because the tab bar sits above the
+           * gesture bar, not under it — without it the button tucks behind the
+           * navigation pill on a gesture-navigation phone.
+           */
+          bottom: TAB_BAR_HEIGHT + insets.bottom + spacing.sm,
           width: 30,
           height: 30,
           borderRadius: radius.pill,

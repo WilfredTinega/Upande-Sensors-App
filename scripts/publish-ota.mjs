@@ -6,19 +6,23 @@
  * need a 74MB APK — it needs the JS bundle and its assets, which is about a
  * megabyte. This produces the tree GitHub Pages then serves:
  *
- *   ota/android/<runtime>/manifest.json     the Expo Updates manifest
- *   ota/android/<runtime>/bundles/...        the JS bundle
- *   ota/android/<runtime>/assets/...         fonts, images
+ *   ota/android/<runtime>/manifest.json                    the Expo Updates manifest
+ *   ota/android/<runtime>/_expo/static/js/android/*.hbc    the Hermes bundle
+ *   ota/android/<runtime>/assets/...                       fonts, images
  *
- * ── Why a static host can work at all ────────────────────────────────────────
+ * ── Who serves what ──────────────────────────────────────────────────────────
  *
- * The Expo Updates protocol sends the runtime version as a *request header*, and
- * no static file server can vary a response on a header. But `updates.url` is
- * baked into each build, and `scripts/version.mjs` writes the runtime into it —
- * so a 1.0.x app only ever requests the 1.0 manifest and a 1.1 app only ever
- * requests 1.1. The compatibility gate moves from the server to the URL, where a
- * static host can honour it, and it becomes impossible to hand a 1.0 device a
- * 1.1 bundle.
+ * GitHub Pages hosts the bundle and the assets ONLY. The manifest.json written
+ * here is not what the device fetches directly: `expo-updates` refuses a
+ * manifest response without an `expo-protocol-version` header ("Legacy
+ * manifests are no longer supported", `UpdateFactory.kt`), and a static host
+ * cannot set one. So `updates.url` points at the Frappe site
+ * (`upande_sensors.api.ota.manifest`), which reads the `expo-runtime-version`
+ * and `expo-platform` headers the client already sends, fetches
+ * `<otaBaseUrl>/<platform>/<runtime>/manifest.json` from Pages, and returns it
+ * with the header added. Asset downloads need no special headers, so they go to
+ * Pages directly — which is why every URL in the manifest is absolute and built
+ * from `extra.otaBaseUrl` rather than from `updates.url`.
  *
  * ── What this does NOT do ────────────────────────────────────────────────────
  *
@@ -91,17 +95,26 @@ const runtimeDir = join(OUT, 'android', runtimeVersion);
 rmSync(runtimeDir, { recursive: true, force: true });
 mkdirSync(runtimeDir, { recursive: true });
 
-// Copy the export wholesale; the manifest below points into it by relative path.
-for (const sub of ['bundles', 'assets']) {
-  const from = join(EXPORT_DIR, sub);
-  if (existsSync(from)) cpSync(from, join(runtimeDir, sub), { recursive: true });
-}
+// Copy exactly what the manifest will reference, at the paths the export gave
+// them. The bundle's location comes from metadata.json rather than a fixed
+// directory name: `expo export` writes the Hermes bytecode under
+// `_expo/static/js/<platform>/<hash>.hbc`, not the `bundles/` of older SDKs, and
+// a copy loop over a guessed directory silently produced a manifest pointing at
+// a file that was never published.
+mkdirSync(dirname(join(runtimeDir, android.bundle)), { recursive: true });
+cpSync(join(EXPORT_DIR, android.bundle), join(runtimeDir, android.bundle));
+const assetsFrom = join(EXPORT_DIR, 'assets');
+if (existsSync(assetsFrom)) cpSync(assetsFrom, join(runtimeDir, 'assets'), { recursive: true });
 
-const base = (appConfig.expo.updates?.url || '').replace(/\/manifest\.json$/, '');
-if (!base) {
-  console.error('app.json has no expo.updates.url — nothing to build absolute asset URLs from.');
+// Where Pages will serve this runtime's files from. Not derived from
+// `updates.url`: that now points at the Frappe proxy, which is not where the
+// bundle lives.
+const otaBase = String(appConfig.expo.extra?.otaBaseUrl || '').replace(/\/+$/, '');
+if (!otaBase) {
+  console.error('app.json has no expo.extra.otaBaseUrl — nothing to build absolute asset URLs from.');
   process.exit(2);
 }
+const base = `${otaBase}/android/${runtimeVersion}`;
 
 const assetEntry = (relPath, key) => ({
   hash: hashOf(join(runtimeDir, relPath)),
@@ -143,5 +156,6 @@ console.log(
   `\nWrote ${relative(ROOT, runtimeDir)}\n` +
     `  version ${version}, runtime ${runtimeVersion}, id ${manifest.id}\n` +
     `  ${manifest.assets.length + 1} files, ${(bytes / 1048576).toFixed(1)} MB\n` +
-    `  serve at ${base}/manifest.json`,
+    `  Pages serves ${base}/manifest.json\n` +
+    `  devices fetch it through ${appConfig.expo.updates?.url || '(updates.url unset)'}`,
 );

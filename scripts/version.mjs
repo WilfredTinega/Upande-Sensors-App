@@ -241,21 +241,19 @@ if (hasFlag('apply')) {
   const runtime = runtimeVersionFor(version);
   appConfig.expo.runtimeVersion = runtime;
   /**
-   * The update URL carries the runtime, and that is what makes a static host
-   * viable at all.
+   * `updates.url` is deliberately NOT touched.
    *
-   * The Expo Updates protocol sends the runtime as a *request header*, which no
-   * static file server can vary a response on. But `updates.url` is baked into
-   * each build — so a 1.0.x APK only ever asks for the 1.0 manifest, and a 1.1
-   * build only ever asks for 1.1. The gate moves from the server to the URL,
-   * and it becomes physically impossible to hand a 1.0 device a 1.1 bundle.
+   * It used to carry the runtime (`…/ota/android/1.0/manifest.json`) so that a
+   * static host could serve the right manifest without reading a header. That
+   * design turned out not to work: `expo-updates` refuses any manifest response
+   * that lacks an `expo-protocol-version` header ("Legacy manifests are no
+   * longer supported", `UpdateFactory.kt`), and GitHub Pages cannot set one. The
+   * manifest is now served by the Frappe site, which reads the runtime from the
+   * `expo-runtime-version` header the client already sends — so the URL is
+   * fixed and the gate is back where the protocol puts it. Pages hosts only the
+   * bundle and assets; `scripts/publish-ota.mjs` builds their URLs from
+   * `extra.otaBaseUrl` plus `runtimeVersion`.
    */
-  if (appConfig.expo.updates?.url) {
-    appConfig.expo.updates.url = appConfig.expo.updates.url.replace(
-      /\/ota\/android\/[^/]+\/manifest\.json$/,
-      `/ota/android/${runtime}/manifest.json`,
-    );
-  }
   writeFileSync(APP_JSON, `${JSON.stringify(appConfig, null, 2)}\n`);
 
   pkg.version = version;

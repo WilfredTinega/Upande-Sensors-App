@@ -1,12 +1,24 @@
 /**
  * Typed-ish wrappers over the API this app is served by.
  *
- * Every method name in `M` mirrors a real `api_method` on a Server Script kept
- * under `server/scripts/` in this repo, so a broken call can be traced back to
- * the Python that serves it without guessing — see `server/README.md`.
+ * Every loader tries up to three addresses for the same answer, in this order:
+ *
+ *   1. `upande_sensors.api.mobile.<name>` — the whitelisted methods that ship
+ *      inside the `upande_sensors` Frappe app (`upande_sensors/api/mobile.py`).
+ *      This is where the API lives now: versioned with the app, installed by
+ *      `bench migrate`, and no longer dependent on Server Scripts being enabled
+ *      for the site.
+ *   2. `upande_sensors_app.<name>` — the Server Scripts kept under
+ *      `server/scripts/` in this repo. Same params, same response shapes: they
+ *      were the first home of this API, and they stay deployed as the answer for
+ *      a site whose `upande_sensors` is older than the client.
+ *   3. `LEGACY` — the calls both of those replaced, where one exists.
+ *
+ * `APP` and `SCRIPT` name the same set of endpoints, so a broken call can be
+ * traced to the Python that serves it without guessing — see `server/README.md`.
  *
  * Why the app has its own endpoints rather than calling the `upande_sensors`
- * app's whitelisted methods and Frappe's generic client API directly:
+ * app's older whitelisted methods and Frappe's generic client API directly:
  *
  *  1. Permissions. The generic API enforces doctype permissions, and the
  *     doctypes this app reads are locked down — `Sensor Reading` grants read to
@@ -28,12 +40,12 @@
  *     could not tell most accounts what the server was running or what timezone
  *     it kept.
  *
- * `LEGACY` holds the call each of these replaced. An instance that has not had
- * the scripts deployed answers "Failed to get method for command …", which the
- * client reports as `isMissingEndpoint` — the loaders below fall back to the old
- * path on exactly that error, so the app keeps working against a site where the
- * scripts are absent or older than the client. A permission error is NOT a
- * fallback trigger: it is the server's real answer.
+ * An instance that lacks an endpoint answers "Failed to get method for command
+ * …", which the client reports as `isMissingEndpoint` — `viaChain` moves to the
+ * next address on exactly that error, so the app keeps working against a site
+ * where the app method is absent, the scripts are absent, or both are older
+ * than the client. A permission error is NOT a fallback trigger: it is the
+ * server's real answer.
  */
 
 import { TTL_LIVE, TTL_REFERENCE, cacheKey, cached } from './cache';
@@ -41,18 +53,44 @@ import { client, FrappeError } from './client';
 
 export { FrappeError };
 
-const M = {
-  whoami: 'upande_sensors_app.whoami',
-  config: 'upande_sensors_app.config',
-  sensorNames: 'upande_sensors_app.sensor_names',
-  live: 'upande_sensors_app.live',
-  chartSeries: 'upande_sensors_app.chart_series',
-  readings: 'upande_sensors_app.readings',
-  activity: 'upande_sensors_app.activity',
-  logRoutes: 'upande_sensors_app.log_routes',
-  reportsList: 'upande_sensors_app.reports_list',
-  reportSubmit: 'upande_sensors_app.report_submit',
-  assignableUsers: 'upande_sensors_app.assignable_users',
+/** The endpoint names, shared by the app methods and the Server Scripts. */
+const NAMES = {
+  whoami: 'whoami',
+  config: 'config',
+  sensorNames: 'sensor_names',
+  live: 'live',
+  chartSeries: 'chart_series',
+  readings: 'readings',
+  activity: 'activity',
+  logRoutes: 'log_routes',
+  reportsList: 'reports_list',
+  reportSubmit: 'report_submit',
+  assignableUsers: 'assignable_users',
+  dashboardHealth: 'dashboard_health',
+  floorPlans: 'floor_plans',
+};
+
+/** Whitelisted methods inside the `upande_sensors` app. Tried first. */
+const APP = Object.fromEntries(
+  Object.entries(NAMES).map(([key, name]) => [key, `upande_sensors.api.mobile.${name}`]),
+);
+
+/** The Server Scripts under `server/scripts/`. Tried when the app method is missing. */
+const SCRIPT = Object.fromEntries(
+  Object.entries(NAMES).map(([key, name]) => [key, `upande_sensors_app.${name}`]),
+);
+
+/**
+ * App-only methods — these arrived after the Server Script era, so there is no
+ * script to fall back to and no legacy call either. A site without them simply
+ * does not have the feature, and the callers say so rather than error.
+ */
+const APP_ONLY = {
+  registerPushToken: 'upande_sensors.api.mobile.register_push_token',
+  unregisterPushToken: 'upande_sensors.api.mobile.unregister_push_token',
+  alerts: 'upande_sensors.api.mobile.alerts',
+  registerInstall: 'upande_sensors.api.mobile.register_install',
+  installs: 'upande_sensors.api.mobile.installs',
 };
 
 const LEGACY = {
@@ -68,7 +106,8 @@ const LEGACY = {
 };
 
 /**
- * Run `primary`; if the endpoint simply isn't on this instance, run `fallback`.
+ * Run each attempt in turn, moving to the next ONLY when the endpoint simply
+ * isn't on this instance.
  *
  * Scoped deliberately narrowly. `isMissingEndpoint` matches Frappe's "Failed to
  * get method for command" — the one error that means "this site does not have
@@ -76,14 +115,39 @@ const LEGACY = {
  * answering the question and is passed straight through: silently retrying a
  * 403 against an older endpoint would turn a clear "you don't have access" into
  * whatever the legacy path happened to return.
+ *
+ * When every attempt is missing, the LAST missing-endpoint error is rethrown
+ * rather than a new one: callers such as `trend.js` and the pump control read
+ * `isMissingEndpoint` off it to decide between "older server" and "broken".
+ * Holes in the list (`null` where a loader has no legacy path) are skipped.
  */
-async function orLegacy(primary, fallback) {
-  try {
-    return await primary();
-  } catch (err) {
-    if (err instanceof FrappeError && err.isMissingEndpoint && fallback) return fallback();
-    throw err;
+export async function viaChain(attempts) {
+  let missing = null;
+  for (const attempt of attempts) {
+    if (!attempt) continue;
+    try {
+      return await attempt();
+    } catch (err) {
+      if (err instanceof FrappeError && err.isMissingEndpoint) {
+        missing = err;
+        continue;
+      }
+      throw err;
+    }
   }
+  throw missing || new FrappeError('No endpoint could answer this request.', { status: 0 });
+}
+
+/**
+ * The first two links of every chain: the app method, then the Server Script,
+ * called with identical params — the contract is that the two agree on both
+ * params and response shape, which is what makes the fallback invisible.
+ */
+function appThenScript(key, params, opts) {
+  return [
+    () => client.call(APP[key], params, opts),
+    () => client.call(SCRIPT[key], params, opts),
+  ];
 }
 
 /* ── Identity ────────────────────────────────────────────────────────────── */
@@ -99,8 +163,8 @@ export function getSession(signal, { force = false } = {}) {
   return cached(
     'app_whoami',
     () =>
-      orLegacy(
-        () => client.call(M.whoami, {}, { signal }),
+      viaChain([
+        ...appThenScript('whoami', {}, { signal }),
         // Rebuilt from the old calls, each guarded on its own: on a stock site
         // the timezone and the versions are refused for most accounts, and
         // neither is worth costing anyone their session.
@@ -150,7 +214,7 @@ export function getSession(signal, { force = false } = {}) {
             scoped_sites: [],
           };
         },
-      ),
+      ]),
     { ttl: TTL_REFERENCE, force },
   );
 }
@@ -221,13 +285,18 @@ export async function getUserProfile(user, signal) {
  *
  * The three old endpoints all read the same cached Sensor Settings document, so
  * asking separately paid for the same document three times.
+ *
+ * The app method additionally returns `app: { welcome_message, support_contact,
+ * stale_after_minutes }` from Sensor Settings. The script and legacy paths
+ * predate those fields and return nothing for them; `DashboardContext` treats a
+ * missing block as "use the defaults", so nothing here has to fill it in.
  */
 export function getAppConfig(signal, { force = false } = {}) {
   return cached(
     'app_config',
     () =>
-      orLegacy(
-        () => client.call(M.config, {}, { signal }),
+      viaChain([
+        ...appThenScript('config', {}, { signal }),
         async () => {
           const [config, sites, types] = await Promise.all([
             client.call(LEGACY.dashboardConfig, {}, { signal }),
@@ -241,7 +310,7 @@ export function getAppConfig(signal, { force = false } = {}) {
             units: {},
           };
         },
-      ),
+      ]),
     { ttl: TTL_REFERENCE, force },
   );
 }
@@ -270,24 +339,23 @@ export async function getSensorTypeOptions(signal) {
  * only one of them.
  */
 export function getSensorNames(site, signal) {
-  return orLegacy(
-    () => client.call(M.sensorNames, { site }, { signal }),
+  return viaChain([
+    ...appThenScript('sensorNames', { site }, { signal }),
     () => client.call(LEGACY.sensorNames, { site }, { signal }),
-  );
+  ]);
 }
 
 /** Sensor names that have readings for this site + type (+ tab tag). */
 export function getChartSensorNames({ site, sensorType, tabTag }, signal) {
-  return orLegacy(
-    () =>
-      client.call(M.sensorNames, { site, sensor_type: sensorType, tab_tag: tabTag }, { signal }),
+  return viaChain([
+    ...appThenScript('sensorNames', { site, sensor_type: sensorType, tab_tag: tabTag }, { signal }),
     () =>
       client.call(
         LEGACY.chartSensorNames,
         { site_name: site, sensor_type: sensorType, tab_tag: tabTag },
         { signal },
       ),
-  );
+  ]);
 }
 
 /* ── Charts ──────────────────────────────────────────────────────────────── */
@@ -308,6 +376,12 @@ export function getChartSensorNames({ site, sensorType, tabTag }, signal) {
  * `interval` for calendar buckets. Weekly is served as daily — there is no
  * ISO-shaped week key to put on a time axis — and the response says so in
  * `interval`.
+ *
+ * No legacy link here on purpose. The old endpoints answer in a different shape
+ * (display labels, one measure per call), so the translation lives in
+ * `trend.js`, which catches the missing-endpoint error this rethrows when both
+ * the app method and the script are absent and rebuilds the chart from
+ * `getLegacyChartSeries` / `getLegacySensorDashboard` below.
  */
 export function getChartSeries(
   { site, sensorName, tabTag, sensorTypes, dateFrom, dateTo, interval = 'daily', bucketMins },
@@ -318,19 +392,21 @@ export function getChartSeries(
   // contains", which only the server can work out. Returning early here made
   // the single-day view — the one path that relies on that discovery — come back
   // empty every time without ever issuing a request.
-  return client.call(
-    M.chartSeries,
-    {
-      site,
-      sensor_name: sensorName,
-      tab_tag: tabTag,
-      sensor_types: JSON.stringify(types),
-      date_from: dateFrom,
-      date_to: dateTo,
-      interval,
-      bucket_mins: bucketMins || undefined,
-    },
-    { signal },
+  return viaChain(
+    appThenScript(
+      'chartSeries',
+      {
+        site,
+        sensor_name: sensorName,
+        tab_tag: tabTag,
+        sensor_types: JSON.stringify(types),
+        date_from: dateFrom,
+        date_to: dateTo,
+        interval,
+        bucket_mins: bucketMins || undefined,
+      },
+      { signal },
+    ),
   );
 }
 
@@ -387,8 +463,8 @@ export function getLegacySensorDashboard(
  * first measure, which is what the cards read for a single-parameter sensor.
  */
 export function getLive(site, signal) {
-  return orLegacy(
-    () => client.call(M.live, { site }, { signal }),
+  return viaChain([
+    ...appThenScript('live', { site }, { signal }),
     async () => {
       const sensors = (await client.call(LEGACY.siteSensors, { site }, { signal })) || [];
       const names = sensors.map((s) => s.sensor_name).filter(Boolean);
@@ -401,7 +477,7 @@ export function getLive(site, signal) {
         : {};
       return { site, sensors, values: values || {} };
     },
-  );
+  ]);
 }
 
 /** The sensors half, from the shared cached `getLive` call. */
@@ -431,26 +507,41 @@ function cachedLive(site, signal) {
  * can already see the site's live values.
  */
 export function getReadingsPage(
-  { site, dateFrom, dateTo, sensorType, sensorName, start = 0, pageLength = 50, order, withTotal = 1 },
+  {
+    site,
+    dateFrom,
+    dateTo,
+    sensorType,
+    sensorName,
+    tabTag,
+    start = 0,
+    pageLength = 50,
+    order,
+    withTotal = 1,
+  },
   signal,
 ) {
-  return orLegacy(
-    () =>
-      client.call(
-        M.readings,
-        {
-          site,
-          date_from: dateFrom,
-          date_to: dateTo,
-          sensor_type: sensorType,
-          sensor_name: sensorName,
-          start,
-          page_length: pageLength,
-          order,
-          with_total: withTotal,
-        },
-        { signal },
-      ),
+  return viaChain([
+    ...appThenScript(
+      'readings',
+      {
+        site,
+        date_from: dateFrom,
+        date_to: dateTo,
+        sensor_type: sensorType,
+        sensor_name: sensorName,
+        // Scopes the table to the dashboard the reader is standing on, the same
+        // way the charts are scoped. A server that predates the parameter
+        // ignores it and answers site-wide, which is exactly what it did
+        // before — so sending it can only ever improve the answer.
+        tab_tag: tabTag,
+        start,
+        page_length: pageLength,
+        order,
+        with_total: withTotal,
+      },
+      { signal },
+    ),
     async () => {
       const [rows, total] = await Promise.all([
         client.call(
@@ -478,13 +569,17 @@ export function getReadingsPage(
       ]);
       return { rows: rows || [], total, start, page_length: pageLength };
     },
-  );
+  ]);
 }
 
 /**
  * Filters for the legacy list call. List form rather than a dict because the
  * timestamp bounds need comparison operators, which the dict form can't express.
  */
+// No tab tag here: this path is a plain `frappe.client.get_list` over Sensor
+// Reading, and the monitoring gate lives on the Sensor master, not on the
+// reading row — there is no join to express it with. The fallback is therefore
+// site-wide, as it has always been.
 function legacyReadingFilters({ site, dateFrom, dateTo, sensorType, sensorName }) {
   const filters = [];
   if (site) filters.push(['site_name', '=', site]);
@@ -517,9 +612,9 @@ export function getActivity(
   { dateFrom, dateTo, user, start = 0, pageLength = 50, include = 'routes,auth', authLimit = 1000 } = {},
   signal,
 ) {
-  return client
-    .call(
-      M.activity,
+  return viaChain(
+    appThenScript(
+      'activity',
       {
         date_from: dateFrom,
         date_to: dateTo,
@@ -530,11 +625,11 @@ export function getActivity(
         auth_limit: authLimit,
       },
       { signal },
-    )
-    .then((res) => {
-      rememberNames(res?.full_names);
-      return res;
-    });
+    ),
+  ).then((res) => {
+    rememberNames(res?.full_names);
+    return res;
+  });
 }
 
 /**
@@ -593,12 +688,21 @@ export async function getAuthActivity({ dateFrom, dateTo, pageLength = 1000 } = 
  * Each visit keeps its own timestamp. `Document.insert()` stamps `creation` with
  * now() regardless of what was passed, so the server writes the real visit time
  * back afterwards.
+ *
+ * `source: 'app'` names where the rows came from. Route History is shared with
+ * the desk, whose own recorder writes for every account; the app's rule is that
+ * the Administrator is never tracked (see `RootNavigator`), and the server
+ * enforces the same rule for rows tagged "app" — so a client that forgot to
+ * check, or an old build, cannot write what this one refuses to. Both sides
+ * agreeing is what makes the rule a rule rather than a preference.
  */
 export function logRoutes(rows, signal) {
-  return client.call(
-    M.logRoutes,
-    { routes: JSON.stringify(rows || []) },
-    { write: true, signal },
+  return viaChain(
+    appThenScript(
+      'logRoutes',
+      { routes: JSON.stringify(rows || []), source: 'app' },
+      { write: true, signal },
+    ),
   );
 }
 
@@ -642,17 +746,19 @@ export const ISSUE_KINDS = [
  * the script sandbox has no base64 module of its own.
  */
 export function submitReport({ subject, description, kind = 'issue', assignee, screenshot }, signal) {
-  return client.call(
-    M.reportSubmit,
-    {
-      subject: String(subject || '').trim(),
-      description: String(description || '').trim(),
-      kind,
-      assign_to: assignee || undefined,
-      screenshot_base64: screenshot || undefined,
-      screenshot_name: screenshot ? 'screenshot.jpg' : undefined,
-    },
-    { write: true, signal },
+  return viaChain(
+    appThenScript(
+      'reportSubmit',
+      {
+        subject: String(subject || '').trim(),
+        description: String(description || '').trim(),
+        kind,
+        assign_to: assignee || undefined,
+        screenshot_base64: screenshot || undefined,
+        screenshot_name: screenshot ? 'screenshot.jpg' : undefined,
+      },
+      { write: true, signal },
+    ),
   );
 }
 
@@ -664,10 +770,8 @@ export function submitReport({ subject, description, kind = 'issue', assignee, s
  * shape is a JSON string and the screens were written against that.
  */
 export async function getIssues({ kind, pageLength = 50, start = 0, mine = 0 } = {}, signal) {
-  const res = await client.call(
-    M.reportsList,
-    { kind, page_length: pageLength, start, mine },
-    { signal },
+  const res = await viaChain(
+    appThenScript('reportsList', { kind, page_length: pageLength, start, mine }, { signal }),
   );
   rememberNames(res?.full_names);
   return (res?.rows || []).map((row) => ({
@@ -697,33 +801,205 @@ export function firstAssignee(row) {
  * users".
  */
 export async function searchUsers(txt = '', signal) {
+  const query = String(txt || '').trim();
   try {
-    const rows = await client.call(
-      M.assignableUsers,
-      { txt: String(txt || '').trim(), page_length: 100 },
-      { signal },
-    );
+    const rows = await viaChain([
+      ...appThenScript('assignableUsers', { txt: query, page_length: 100 }, { signal }),
+      async () => {
+        const found = await client.call(
+          'frappe.desk.search.search_link',
+          {
+            doctype: 'User',
+            txt: query,
+            filters: JSON.stringify({ enabled: 1, user_type: 'System User' }),
+            page_length: 100,
+          },
+          { signal },
+        );
+        return (Array.isArray(found) ? found : [])
+          .map((r) => ({ value: r.value, label: r.value }))
+          .filter((r) => String(r.value || '').toLowerCase().endsWith('@upande.com'));
+      },
+    ]);
     return Array.isArray(rows) ? rows : [];
-  } catch (err) {
-    if (!(err instanceof FrappeError) || !err.isMissingEndpoint) return [];
-    try {
-      const rows = await client.call(
-        'frappe.desk.search.search_link',
+  } catch {
+    // Whatever went wrong, the picker shows nobody rather than an error: this
+    // is an optional step on a form whose point is filing the report.
+    return [];
+  }
+}
+
+/* ── Push notifications and limit alerts ─────────────────────────────────── */
+
+/**
+ * Tell the server where to send this device's limit-breach pushes.
+ *
+ * App method only, POST. The token is an Expo push token, and the server
+ * forwards through the Expo push service — so the same row works for any
+ * device that can register with Expo, and the server never holds an FCM
+ * credential per device. A site without the endpoint rejects with
+ * `isMissingEndpoint`, which `push.js` reads as "this server has no alerts".
+ */
+export function registerPushToken({ token, platform, device, appVersion }, signal) {
+  return client.call(
+    APP_ONLY.registerPushToken,
+    { token, platform, device: device || undefined, app_version: appVersion || undefined },
+    { write: true, signal },
+  );
+}
+
+/** Stop pushes to this device — called before a sign-out drops the session. */
+export function unregisterPushToken(token, signal) {
+  return client.call(APP_ONLY.unregisterPushToken, { token }, { write: true, signal });
+}
+
+/**
+ * Limit breaches recorded for a site, newest first.
+ *
+ * `{ rows: [{ name, site, sensor_name, monitoring, measure, value, unit,
+ * limit_min, limit_max, direction, reading_timestamp, creation }], total }`.
+ * Rethrows a missing endpoint untouched so the Home screen can hide the card
+ * on a server that predates alerts, rather than show an empty one.
+ */
+export function getAlerts({ site, sinceDays = 7, start = 0, pageLength = 5 } = {}, signal) {
+  return client.call(
+    APP_ONLY.alerts,
+    { site, since_days: sinceDays, start, page_length: pageLength },
+    { signal },
+  );
+}
+
+/* ── Device register ─────────────────────────────────────────────────────── */
+
+/**
+ * Record that this device has the app installed, and that it was opened.
+ *
+ * App method only for now, POST — a write over GET is rolled back by Frappe and
+ * would report success having recorded nothing. There is no Server Script link
+ * in the chain yet because `server/scripts/` is owned elsewhere and has not
+ * been given one; both calls below still go through `viaChain` so adding that
+ * second attempt later is one line rather than a rewrite, and so a site without
+ * the method raises the same `isMissingEndpoint` every other loader does.
+ *
+ * The IP in the register is observed by the server from the request. The app
+ * does not send one and must not start: see `api/install.js` for what the
+ * payload is allowed to contain.
+ */
+export function registerInstall(
+  {
+    installId,
+    reason,
+    platform,
+    device_brand: brand,
+    device_model: model,
+    device_name: name,
+    os_version: osVersion,
+    app_version: appVersion,
+    runtime_version: runtimeVersion,
+    is_physical_device: isPhysical,
+  },
+  signal,
+) {
+  return viaChain([
+    () =>
+      client.call(
+        APP_ONLY.registerInstall,
         {
-          doctype: 'User',
-          txt: String(txt || '').trim(),
-          filters: JSON.stringify({ enabled: 1, user_type: 'System User' }),
-          page_length: 100,
+          install_id: installId,
+          // 'login' or 'launch'. The server keeps one record per (device,
+          // account) pair, so a sign-in is the event that creates the pairing
+          // for whoever just signed in on a shared phone.
+          reason: reason || undefined,
+          platform,
+          device_brand: brand || undefined,
+          device_model: model || undefined,
+          device_name: name || undefined,
+          os_version: osVersion || undefined,
+          app_version: appVersion || undefined,
+          runtime_version: runtimeVersion || undefined,
+          is_physical_device: isPhysical ? 1 : 0,
+        },
+        { write: true, signal },
+      ),
+  ]);
+}
+
+/**
+ * The register itself, for the App activity screen. System Manager only.
+ *
+ * `{ rows: [{ install_id, user, full_name, platform, device_brand,
+ * device_model, os_version, app_version, previous_app_version,
+ * version_changed_at, upgrades, ip_address, first_seen, last_seen, launches }],
+ * total, summary: { total_installs, devices, users, physical_devices,
+ * active_7d, active_30d, by_user, by_model, by_app_version, by_platform } }`.
+ *
+ * A row is a (device, account) pair, not a device: a shared phone reports every
+ * person who signs in on it. `summary.by_user` is those pairs as `{ user,
+ * full_name, app_version, device_model, platform, last_seen, devices, logins }`
+ * ordered by `last_seen` — which build each person is actually running, the
+ * question the whole feature exists to answer.
+ *
+ * `summary.total_installs` is a cumulative counter the server keeps, so it
+ * counts every install that has ever registered and does not fall when a device
+ * row is deleted; `summary.devices` is how many rows exist now. The screen
+ * labels the two apart — they answer different questions and are only equal on
+ * a register nothing has ever been removed from.
+ *
+ * A missing endpoint is rethrown untouched so the caller can say "needs a newer
+ * server" instead of showing a register with nothing in it, which would read as
+ * "nobody has installed the app".
+ */
+export function getInstalls({ start = 0, pageLength = 50, sinceDays, search } = {}, signal) {
+  return viaChain([
+    () =>
+      client.call(
+        APP_ONLY.installs,
+        {
+          start,
+          page_length: pageLength,
+          since_days: sinceDays || undefined,
+          search: search || undefined,
         },
         { signal },
-      );
-      return (Array.isArray(rows) ? rows : [])
-        .map((r) => ({ value: r.value, label: r.value }))
-        .filter((r) => String(r.value || '').toLowerCase().endsWith('@upande.com'));
-    } catch {
-      return [];
-    }
-  }
+      ),
+  ]);
+}
+
+/* ── Dashboard health and floor plans ────────────────────────────────────── */
+
+/**
+ * Sensor tallies per dashboard tab, in one request.
+ *
+ * `{ stale_minutes, tabs: { [tab.name]: { total, active, stale, last_reading,
+ * scope } }, site: { total, active, stale, last_reading } }`, keyed by the
+ * Sensor Setting CHILD ROW NAME — the same `name` `config` gives each tab, and
+ * the only key a tile is looked up by.
+ *
+ * Both of these were app-method-only, and `upande_sensors.api.mobile` is not
+ * deployed to the live site — so every call answered `isMissingEndpoint`, the
+ * Home tiles hid their counts and the Floor Plan tab said "needs a newer
+ * server". They now go through the ordinary chain, with the Server Scripts in
+ * `server/scripts/` as the second link, which is a path that exists today.
+ * Still missing on a site with neither: the callers say so rather than showing
+ * zeros, because a row of zeros claims every dashboard is empty.
+ */
+export function getDashboardHealth(site, signal) {
+  return viaChain(appThenScript('dashboardHealth', { site }, { signal }));
+}
+
+/**
+ * The site's floor plans, the selected plan with its placements and markers,
+ * the live reading per placed sensor, and door states for linked doors.
+ *
+ * One request for everything the Floor Plan tab draws, so a poll is one round
+ * trip. `plan` null means the server picks the first plan; `doorHours` is the
+ * window the door totals are summed over. Read-only: the app never calls any of
+ * the plan's write endpoints, so `can_edit` in the payload is ignored.
+ */
+export function getFloorPlans({ site, plan = null, doorHours = 24 } = {}, signal) {
+  return viaChain(
+    appThenScript('floorPlans', { site, plan: plan || undefined, door_hours: doorHours }, { signal }),
+  );
 }
 
 /* ── Account names ───────────────────────────────────────────────────────── */

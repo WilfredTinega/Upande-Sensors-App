@@ -153,8 +153,14 @@ const check = (name, ok) => {
   mode = 'down';
   recordRoute('Unsent');
   await sleep(300);
+  check('unsent work is on disk while signed in', disk && JSON.parse(disk).some((r) => r.route === 'Unsent'));
   setRouteHistoryEnabled(false);
-  check('sign-out keeps unsent work on disk', disk && JSON.parse(disk).some((r) => r.route === 'Unsent'));
+  // Rows are attributed to the session that SENDS them, so a queue kept across
+  // sign-out would be written under whoever signs in next — and with the
+  // Administrator exempt from recording, that is now a real mis-attribution
+  // rather than a cosmetic one.
+  check('sign-out drops unsent work', !disk || !JSON.parse(disk).some((r) => r.route === 'Unsent'));
+  check('and the queue is empty', getRecordingStatus().pending === 0);
 
   const stopped = requests.length;
   await sleep(300);
@@ -163,7 +169,7 @@ const check = (name, ok) => {
   mode = 'ok';
   setRouteHistoryEnabled(true, 'sam@upande.com');
   await sleep(300);
-  check('the next sign-in delivers it', direct.some((r) => r.route === 'Unsent'));
+  check('the next sign-in does not deliver another account\'s visits', !direct.some((r) => r.route === 'Unsent'));
 
   /* ── caps ───────────────────────────────────────────────────────────────── */
   mode = 'down';

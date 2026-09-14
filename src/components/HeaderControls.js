@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Image, Pressable, Text, View } from 'react-native';
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -8,6 +8,31 @@ import { useDashboard } from '../context/DashboardContext';
 import { useThemePreference } from '../context/ThemeContext';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { font } from '../theme';
+
+/**
+ * Header title for Home: the Upande mark, and nothing else.
+ *
+ * The word "Home" was the only thing on the screen naming the app, and it named
+ * the wrong thing — the tab bar's highlighted house glyph already says where
+ * you are, so the title was repeating it. The mark is the app identifying
+ * itself, once, on its landing screen, where the other screens carry a title
+ * that has actual work to do. Same asset and size as the sidebar's launcher, so
+ * the two read as one mark in two places rather than two marks.
+ *
+ * The accessibility label stays "Home": a screen reader needs the destination,
+ * not the brand.
+ */
+export function HomeHeaderTitle() {
+  return (
+    <Image
+      source={require('../../assets/upande-logo.png')}
+      style={{ width: 28, height: 28 }}
+      resizeMode="contain"
+      accessibilityRole="image"
+      accessibilityLabel="Home"
+    />
+  );
+}
 
 /**
  * Header title for the dashboard screen: the sidebar's active selection.

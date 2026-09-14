@@ -15,6 +15,7 @@ import { TTL_LIVE, TTL_REFERENCE, TTL_SERIES, cacheKey, invalidate } from '../ap
 import { getChartSensorNames } from '../api/endpoints';
 import { ROLLUP_SPAN_DAYS, fetchBucketedTrend, fetchSeriesTrend } from '../api/trend';
 import {
+  derivesClimate,
   isMeasured,
   measuredValues,
   measuresFromLive,
@@ -22,6 +23,7 @@ import {
   withDerivedMeasures,
 } from '../utils/measures';
 import { liveKey, loadLiveForSite } from '../api/liveSite';
+import { FLOOR_PLAN_SLUG, FloorPlanScreen } from './FloorPlanScreen';
 import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
@@ -31,7 +33,6 @@ import { RANGES, fullTimestamp, rangeToDates, trimFutureSeries } from '../utils/
 /** Chart bucket width for a single day. `sensor_dashboard` groups by minutes. */
 const BUCKET_MINS = 20;
 
-/** Stable empty result, so an empty chart doesn't re-render on every pass. */
 /**
  * Wide enough for the longest measure name — "Soil Temperature" — so no tile
  * ever truncates its own label, and flexible so a row that fits divides the
@@ -39,15 +40,38 @@ const BUCKET_MINS = 20;
  */
 const TILE_WIDTH = { flex: 1, minWidth: 116 };
 
+/** Stable empty result, so an empty chart doesn't re-render on every pass. */
 const EMPTY_TREND = { labels: [], series: [] };
 
+/**
+ * The Dashboard tab is whatever Sensor Settings says it is, and one of those
+ * things is not a chart.
+ *
+ * On the website the tab keyed `floor-plan` renders a blueprint with the
+ * sensors pinned on it instead of a time series (see the SPA's `Tab.vue`,
+ * which switches to `FlowPlanBoard` for exactly that slug). The app follows
+ * the same rule, so a site that has arranged its sensors on a drawing sees the
+ * drawing on the phone too.
+ *
+ * Done as a wrapper rather than an early return inside the chart screen: the
+ * two render completely different sets of hooks, and switching tabs between
+ * them mid-component would change the hook order. As sibling components React
+ * unmounts one and mounts the other, which is what actually happens anyway.
+ */
 export function ChartsScreen() {
+  const { activeTab } = useDashboard();
+  if (activeTab?.slug === FLOOR_PLAN_SLUG) return <FloorPlanScreen />;
+  return <ChartsTabScreen />;
+}
+
+function ChartsTabScreen() {
   const t = useTheme();
   const {
     site,
     sitesLoading,
     unitForType,
     filtersLocked,
+    activeTab,
     tabTag,
     configLoading,
     sensorTypesForTab,
@@ -77,6 +101,9 @@ export function ChartsScreen() {
    */
   const wideRange = days >= ROLLUP_SPAN_DAYS;
 
+  /** Whether this dashboard wants the condensation pair at all. */
+  const derived = derivesClimate(activeTab);
+
   /**
    * Which measures to ask for, when asking one at a time.
    *
@@ -95,10 +122,26 @@ export function ChartsScreen() {
   });
 
   const measures = useMemo(() => {
-    const reporting = measuresFromLive(live.data).map((m) => m.label);
     const configured = (sensorTypesForTab || []).map((st) => st.label).filter(Boolean);
+    // A tab that configures nothing means "whatever this site reports" — the
+    // only case where the site-wide payload is the right source.
+    if (!configured.length) return sortByMeasure(measuresFromLive(live.data).map((m) => m.label));
+
+    // Sensor Settings is the authority, and only it.
+    //
+    // This used to be the UNION of the tab's types and everything the site is
+    // currently reporting, taken from `live` — which is the SITE-wide payload,
+    // not a tab-scoped one. So every measure any sensor anywhere on the site
+    // reports was asked for on every dashboard: a cold chain tab requested Soil
+    // Moisture because a greenhouse probe next door reports it, and the server
+    // then either charted that probe or charted an empty line. The tab's own
+    // Sensor Type Setting rows are what the dashboard is *about*; a reading
+    // from a sensor the tab does not cover cannot add a measure to it.
+    //
+    // Deduplicated case-insensitively, because the same measure is spelled
+    // differently between the registry and the readings ("Soil moisture").
     const seen = new Map();
-    [...reporting, ...configured].forEach((label) => {
+    configured.forEach((label) => {
       const key = String(label).trim().toLowerCase();
       if (key && !seen.has(key)) seen.set(key, label);
     });
@@ -134,7 +177,7 @@ export function ChartsScreen() {
             signal,
           )
         : fetchBucketedTrend(
-            { site, sensorName, dateFrom, dateTo, bucketMins: BUCKET_MINS },
+            { site, sensorName, tabTag, dateFrom, dateTo, bucketMins: BUCKET_MINS },
             signal,
           ),
     { ttl: TTL_SERIES },
@@ -156,9 +199,16 @@ export function ChartsScreen() {
     );
 
     // Dew point and ΔT come last: they are derived from the two above them
-    // rather than measured, and the order makes that relationship legible.
-    return trimFutureSeries(trend.data.labels || [], withDerivedMeasures(series));
-  }, [trend.data, unitForType]);
+    // rather than measured, and the order makes that relationship legible. On
+    // the cold tabs they are not appended at all — see `derivesClimate`. The
+    // stat tiles below are built from this same array, so dropping them here
+    // takes them off the tiles as well as off the chart, which is the point:
+    // a tile for a line that isn't drawn is worse than either.
+    return trimFutureSeries(
+      trend.data.labels || [],
+      derived ? withDerivedMeasures(series) : series,
+    );
+  }, [trend.data, unitForType, derived]);
 
   /**
    * Sensor names for the picker.

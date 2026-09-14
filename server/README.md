@@ -1,8 +1,19 @@
 # Server-side API
 
-The API this app is served by, as **Server Script** documents of type `API`.
-Each file in `scripts/` is one endpoint, reachable at
-`/api/method/<api_method>`; `manifest.json` maps files to methods.
+The API this app is served by now lives **in the `upande_sensors` Frappe app**,
+as whitelisted methods in `upande_sensors/api/mobile.py`
+(`upande_sensors.api.mobile.<name>`). It is versioned with the app, installed by
+`bench migrate`, and no longer needs Server Scripts to be enabled for the site.
+
+The **Server Script** documents kept under `scripts/` here are the same
+endpoints' first home, as `upande_sensors_app.<name>`. They stay deployed **only
+as the fallback** for a site whose `upande_sensors` is older than the client,
+and they must keep the same params and response shapes as the app methods —
+that agreement is what lets the client fall from one to the other invisibly.
+`manifest.json` maps files to methods; `npm run server:deploy` pushes them.
+
+The client tries **app method → Server Script → legacy call** (where a legacy
+call exists), moving on *only* when the endpoint is missing — see "Client side".
 
 Target site: `https://sensor.upande.com`.
 
@@ -58,19 +69,107 @@ case.
 
 ## Endpoints
 
-| `api_method` | HTTP | Replaces |
-| --- | --- | --- |
-| `upande_sensors_app.whoami` | GET | `get_logged_user`, `Has Role`, `User`, `System Settings.time_zone`, `change_log.get_versions` |
-| `upande_sensors_app.config` | GET | `get_dashboard_config`, `get_user_sites`, `get_sensor_type_options` |
-| `upande_sensors_app.sensor_names` | GET | `get_sensor_names`, `sensor_charts.get_sensor_names` |
-| `upande_sensors_app.live` | GET | `flow_plan.get_site_sensors`, `flow_plan.get_live_readings` |
-| `upande_sensors_app.chart_series` | GET | `sensor_charts.get_chart_series`, `sensor_dashboard.sensor_dashboard` |
-| `upande_sensors_app.readings` | GET | `get_list` + `get_count` on Sensor Reading |
-| `upande_sensors_app.activity` | GET | `get_list` + `get_count` on Route History, `get_list` on Activity Log, `get_list` on User |
-| `upande_sensors_app.log_routes` | **POST** | `insert_many` on Route History, `route_history.deferred_insert` |
-| `upande_sensors_app.reports_list` | GET | `get_list` on Issue |
-| `upande_sensors_app.report_submit` | **POST** | `client.insert`, `assign_to.add`, `client.attach_file` |
-| `upande_sensors_app.assignable_users` | GET | `desk.search.search_link`, `get_list` on User |
+Primary (in the app) first, the Server Script fallback second, then what both
+replaced. Params and response shapes are identical across the first two columns.
+
+| app method `upande_sensors.api.mobile.…` | Server Script `upande_sensors_app.…` | HTTP | Replaces |
+| --- | --- | --- | --- |
+| `whoami` | `whoami` | GET | `get_logged_user`, `Has Role`, `User`, `System Settings.time_zone`, `change_log.get_versions` |
+| `config` | `config` | GET | `get_dashboard_config`, `get_user_sites`, `get_sensor_type_options` |
+| `sensor_names` | `sensor_names` | GET | `get_sensor_names`, `sensor_charts.get_sensor_names` |
+| `live` | `live` | GET | `flow_plan.get_site_sensors`, `flow_plan.get_live_readings` |
+| `chart_series` | `chart_series` | GET | `sensor_charts.get_chart_series`, `sensor_dashboard.sensor_dashboard` |
+| `readings` | `readings` | GET | `get_list` + `get_count` on Sensor Reading |
+| `activity` | `activity` | GET | `get_list` + `get_count` on Route History, `get_list` on Activity Log, `get_list` on User |
+| `log_routes` | `log_routes` | **POST** | `insert_many` on Route History, `route_history.deferred_insert` |
+| `reports_list` | `reports_list` | GET | `get_list` on Issue |
+| `report_submit` | `report_submit` | **POST** | `client.insert`, `assign_to.add`, `client.attach_file` |
+| `assignable_users` | `assignable_users` | GET | `desk.search.search_link`, `get_list` on User |
+| `dashboard_health` | `dashboard_health` | GET | new: `site, stale_minutes` → `{stale_minutes, tabs: {<Sensor Setting row name>: {total, active, stale, last_reading, scope}}, site}` |
+| `floor_plans` | `floor_plans` | GET | `flow_plan.list_flow_plans`, `get_flow_plan`, `get_live_readings`, `get_door_stats` |
+| `register_push_token` | — | **POST** | new: `token, platform, device, app_version` → Expo push registration |
+| `unregister_push_token` | — | **POST** | new: `token` |
+| `alerts` | — | GET | new: `site, since_days=7, start, page_length` → `{ rows, total }` of limit breaches |
+
+`config` additionally returns `app: { welcome_message, support_contact,
+stale_after_minutes }` from Sensor Settings **on the app method only**; the
+script predates those fields and the client treats their absence as "use the
+defaults" (stale default 120 minutes).
+
+`log_routes` is sent `source: 'app'`, and the server refuses Administrator rows
+carrying it — the client never records the Administrator either (see
+`RootNavigator`), so the two sides agree.
+
+The three push/alert methods are **app-only**: they arrived after the Server
+Script era, there is no script to fall back to, and the client treats a missing
+endpoint as "this server has no alerts" (the Home card is hidden, the Account
+row says so).
+
+### Tab gating
+
+`sensor_names`, `live`, `chart_series`, `readings` and `dashboard_health` all
+take a **`tab_tag`** and resolve it the same way — one block of code, copied
+byte-identically into the five files, because Server Scripts are standalone
+documents and cannot import one another. `floor_plans` is the deliberate
+exception: the floor plan tab's sensors are whatever is pinned to a Flow Plan,
+not a monitoring type, which is how `upande_sensors.api.mobile` scopes it too.
+
+`tab_tag` is accepted in **either form** — the dashboard slug the app sends
+(`cold-chain-monitoring`, from `activeTab.slug`) or the website's short tag
+(`cold_chain`) — and resolves to one or more **Sensor Monitoring Types**
+(`Sensor.monitoring`), matching
+`upande_sensors.api.sensor_charts.monitoring_types_for_tab` /
+`sensor_names_for_monitoring` and `mobile._apply_gate`. Three outcomes:
+
+| resolution | the gate |
+| --- | --- |
+| no monitoring type (`floor-plan`, `pump-control`, an unknown tag) | no sensor filter — the whole site, as before |
+| a type, and sensors carry it | only those sensors |
+| a type, and **no** sensor carries it | **nothing** — empty series, empty list, `total: 0` |
+
+The third row is the fix. Until 2026-09-13 these scripts keyed their map on the
+short tags only and gated on the retired `Sensor.track_in_cold_chain` /
+`track_in_cold_room` / `track_greenhouse` / `track_in_pumps_energy` /
+`track_vehicle` checkboxes. An unknown key means "ungated", so a slug from the
+app never matched and the gate never fired at all: **every tab drew every sensor
+at the site.** That is the MKA report — a site with no cold chain and no cold
+room whose Cold Chain and Cold Room tabs were full of greenhouse data. Measured
+on the local `sensors` site, MKA, 2026-07-01..20: Cold Chain and Cold Room each
+served 4 sensors, 10,049 readings and two full 20-point series before; both now
+serve 0 sensors, 0 readings and no series, and the site's other tabs are
+untouched.
+
+"No cold chain here" and "this tab does not gate" must not produce the same
+answer, which is exactly what they used to do.
+
+The retired checkboxes are still read, but **only** on a site whose `Sensor`
+doctype has no `monitoring` field (`frappe.get_meta("Sensor").has_field`), so an
+older site keeps working. Every column read is guarded by `has_field` first:
+asking for a column a site does not have is a 500, and a 500 reaches the app as
+an empty chart. Where neither the field nor the checkbox exists, the tab is left
+ungated rather than silently emptied — the behaviour these scripts always had.
+
+A user granted particular Sensors (Sensor Settings → Grant Access) is narrowed
+to those on top of the tab gate, the same rule `mobile._sensor_gate` applies;
+an account with no Sensor grant at all is unrestricted, as before.
+
+`dashboard_health` and `floor_plans` were app-only too, and that is why the Home
+tiles showed no sensor counts and the Floor Plan tab said "needs a newer
+server": `upande_sensors/api/mobile.py` is not deployed to sensor.upande.com, so
+both answered "Failed to get method for command" and the client — correctly —
+hid a feature it could not get an honest answer for. The scripts here are the
+same two endpoints on a path that exists today. `dashboard_health` scopes each
+tab the way the dashboards do: `Sensor.monitoring` for the monitoring-tagged
+tabs (cold room, cold chain, greenhouse, vehicle, pump/energy), the Flow Plan
+placements for the floor plan tab, the tab's configured Sensor Types otherwise —
+and **zeros with `scope: "none"`** for a tab whose sensors cannot be identified,
+never the site-wide total, which on a tile is indistinguishable from a real
+count. `floor_plans` is read-only by construction: it has no write path, and
+the app calls none of the plan-editing endpoints.
+
+Also in the app, not a data endpoint: `upande_sensors.api.ota.manifest` (GET)
+proxies the Expo Updates manifest from GitHub Pages and adds the
+`expo-protocol-version: 1` header the client requires — see `docs/OTA.md`.
 
 `activity` is System Manager only — that gate is deliberate, and is now
 enforced once with a sentence explaining it rather than arriving as an
@@ -136,6 +235,17 @@ Python. What actually bites:
   `live.py` does.
 - **A literal `%` in SQL collides with the driver's `%(name)s` placeholders**
   and the query dies before it runs. Bind LIKE patterns as parameters.
+- **`frappe.db.has_column` is not in the sandbox** — the whitelist is
+  `get_list`, `get_all`, `get_value`, `get_single_value`, `get_default`,
+  `exists`, `count`, `escape`, `sql`. Ask the doctype instead:
+  `frappe.get_meta("Sensor").has_field(...)`, which is what the tab gate does
+  before it reads `monitoring` or any `track_*` column.
+- **The tab gate is duplicated on purpose.** The block between
+  `# ── Tab gate` and `# ── end of the shared tab gate` is byte-identical in
+  `sensor_names.py`, `live.py`, `chart_series.py`, `readings.py` and
+  `dashboard_health.py` — a script cannot import another script, so a `diff`
+  between any two of those blocks being empty is the only guarantee the five
+  endpoints answer the same question. Change one, change all five.
 
 ### Testing before deploying
 
@@ -165,6 +275,16 @@ frappe.db.rollback()                          # for the POST scripts
 Worth covering: an Administrator, an account scoped to one Sensor Site by User
 Permission, and an account with none at all — the last sees *every* site, which
 is the app's rule and not an oversight.
+
+For the tab gate specifically, no `Sensor` on the local site carries a
+`monitoring` value, so the *empty* half of the gate is what you get for free:
+ask for `tab_tag="cold-chain-monitoring"` on MKA and every endpoint must answer
+with nothing. Prove the other half inside the same transaction — insert a
+`Sensor` row with `monitoring: "Cold Chain"` and a `sensor_name` that has
+readings, re-run, and the gate should let exactly that one through — then
+`frappe.db.rollback()`. The legacy path is testable the same way: delete the
+`monitoring` DocField row, insert a `track_in_cold_chain` one, `frappe.clear_cache(doctype="Sensor")`,
+and roll back.
 
 ## Performance
 
@@ -217,13 +337,18 @@ and a deliberate decision.
 
 ## Client side
 
-`src/api/endpoints.js` calls these. Each loader falls back to the call it
-replaced when the endpoint is absent — Frappe answers "Failed to get method for
-command …", which the client reports as `isMissingEndpoint` — so an APK in the
-field keeps working against a site that has not been updated yet. A **permission
-error is not a fallback trigger**: it is the server answering the question, and
-retrying it against an older endpoint would replace a clear refusal with
-whatever that one happened to return.
+`src/api/endpoints.js` calls these through `viaChain([...])`: the app method,
+then the Server Script, then the legacy call where one exists. The chain moves
+to the next link **only** when the endpoint is absent — Frappe answers "Failed
+to get method for command …", which the client reports as `isMissingEndpoint` —
+so an APK in the field keeps working against a site that has not been updated
+yet, whichever generation of the API it carries. A **permission error is not a
+fallback trigger**: it is the server answering the question, and retrying it
+against an older endpoint would replace a clear refusal with whatever that one
+happened to return. `tests/endpointsChain.test.js` pins both halves of that
+rule. When every link is missing, the last missing-endpoint error is rethrown
+as-is, so callers such as `trend.js` can still tell "older server" from
+"broken".
 
 `config` also returns a `units` map (lowercased sensor type -> display unit)
 that nothing reads yet; it is there so a chart axis can be labelled without a

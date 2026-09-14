@@ -133,15 +133,28 @@ function toLabelledSeries(payload, { dateFrom, dateTo } = {}) {
 }
 
 /**
- * Every measure the site reported, in minute buckets. For a single day.
+ * Every measure the tab's sensors reported, in minute buckets. For a single day.
  *
  * No measure list is sent: the endpoint charts whatever the window contains,
  * which is what the Dashboard's day view has always shown.
+ *
+ * `tabTag` is not optional, and its absence was the leak.
+ *
+ * The server gates a monitoring-tagged dashboard — cold room, cold chain,
+ * greenhouse — down to the sensors whose `Sensor.monitoring` link matches the
+ * tab, and it can only do that when the tag is sent. This path did not send it,
+ * so "Today" (the default range, and therefore the view almost everyone lands
+ * on) answered site-wide while every wider range answered tab-scoped: a cold
+ * chain dashboard showed greenhouse sensors until you touched the range picker,
+ * and then they disappeared. Same request, same tab, two different answers.
  */
-export async function fetchBucketedTrend({ site, sensorName, dateFrom, dateTo, bucketMins }, signal) {
+export async function fetchBucketedTrend(
+  { site, sensorName, tabTag, dateFrom, dateTo, bucketMins },
+  signal,
+) {
   try {
     const payload = await getChartSeries(
-      { site, sensorName, dateFrom, dateTo, bucketMins, sensorTypes: [] },
+      { site, sensorName, tabTag, dateFrom, dateTo, bucketMins, sensorTypes: [] },
       signal,
     );
     // Minute buckets are left sparse: a day's grid at 30-minute resolution is 48
@@ -193,7 +206,15 @@ function missingEndpoint(err) {
   return err instanceof FrappeError && err.isMissingEndpoint;
 }
 
-/** The old all-measures bucketed endpoint, which reads a rollup past two days. */
+/**
+ * The old all-measures bucketed endpoint, which reads a rollup past two days.
+ *
+ * No tab tag is forwarded because `sensor_dashboard` has no parameter for one —
+ * it predates the monitoring gate entirely. A server old enough to need this
+ * fallback is a server that cannot scope the answer, so the day view there is
+ * site-wide. Inventing a `tab_tag` argument would be silently dropped by Frappe
+ * and would read here as though the scoping worked.
+ */
 async function legacyBucketedTrend({ site, sensorName, dateFrom, dateTo, bucketMins }, signal) {
   const data = await getLegacySensorDashboard(
     { dateFrom, dateTo, site, sensorName, bucketMins },

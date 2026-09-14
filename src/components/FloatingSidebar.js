@@ -195,13 +195,30 @@ export function FloatingSidebar() {
   return (
     <Modal visible transparent animationType="none" onRequestClose={closeSidebar}>
       <View style={{ flex: 1 }}>
-        <Animated.View style={{ ...StyleSheet.absoluteFillObject, opacity: fade }}>
-          <Pressable
-            accessibilityLabel="Close tabs"
-            onPress={closeSidebar}
-            style={{ flex: 1, backgroundColor: '#00000073' }}
+        {/*
+          The touch layer is the Pressable itself, filling the screen, with the
+          dimming painted by a child that takes no touches at all.
+
+          It was the other way round — a Pressable inside an animated wrapper —
+          and a tap outside the panel could land on the wrapper rather than on
+          the button inside it, so the only ways out were the Android back
+          gesture and picking a dashboard. Tapping the dimmed area is the
+          gesture everyone tries first, and it has to be the one that works.
+        */}
+        <Pressable
+          accessibilityLabel="Close tabs"
+          onPress={closeSidebar}
+          style={StyleSheet.absoluteFill}
+        >
+          <Animated.View
+            pointerEvents="none"
+            style={{
+              ...StyleSheet.absoluteFillObject,
+              opacity: fade,
+              backgroundColor: '#00000073',
+            }}
           />
-        </Animated.View>
+        </Pressable>
 
         <Animated.View
           style={{

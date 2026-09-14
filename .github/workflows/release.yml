@@ -98,14 +98,20 @@ jobs:
           bump="${{ github.event.inputs.bump || 'auto' }}"
           if [ "$bump" = "auto" ]; then
             node scripts/version.mjs --apply
+            node scripts/version.mjs --keep-version --json > version.json
           else
             node scripts/version.mjs --apply --bump "$bump"
+            # `--bump` is repeated here on purpose: without it the JSON report
+            # would say "patch" for a run that was asked for a minor, and the
+            # OTA step below reads that field to decide whether to publish.
+            node scripts/version.mjs --keep-version --json --bump "$bump" > version.json
           fi
-          node scripts/version.mjs --keep-version --json > version.json
           {
             echo "version=$(jq -r .version version.json)"
             echo "tag=$(jq -r .tag version.json)"
             echo "version_code=$(jq -r .versionCode version.json)"
+            echo "bump=$(jq -r .bump version.json)"
+            echo "runtime=$(jq -r .runtimeVersion version.json)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
@@ -115,6 +121,42 @@ jobs:
       # carries, and it is how the in-app update check knows which repo to ask.
       - name: Stamp the source repository into the build
         run: node scripts/stamp-build.mjs --repo "$GITHUB_REPOSITORY"
+
+      # ── Over-the-air JS update ───────────────────────────────────────────────
+      #
+      # A patch release cannot contain native changes, so alongside the APK it
+      # also ships as a JS bundle that devices on the same runtime pick up on
+      # their next launch — see docs/OTA.md. Only for a patch: a minor or major
+      # bump moves the runtime, and no device is on the new runtime yet to
+      # receive a bundle for it.
+      #
+      # Before the prebuild, not after: `expo export` reads app.json, and the
+      # prebuild rewrites package.json's scripts in a way that would otherwise
+      # be exported into the bundle's metadata.
+      #
+      # Works under `workflow_dispatch` too: choosing `patch` (or `auto`, which
+      # is a patch) publishes a bundle; `minor`/`major` skip this and ship the
+      # APK alone.
+      #
+      # GitHub Pages must be enabled on the repository, serving the `gh-pages`
+      # branch from `/ (root)`. That is a repository setting the workflow cannot
+      # change for itself; until it is set, the branch is written but nothing
+      # serves it and devices simply find no update.
+      - name: Build the JS update
+        if: steps.version.outputs.bump == 'patch'
+        run: npm run ota:build
+
+      - name: Publish the JS update to GitHub Pages
+        if: steps.version.outputs.bump == 'patch'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./ota
+          destination_dir: ota
+          # Other runtimes' bundles must survive: devices still on 1.0 keep
+          # asking for /ota/android/1.0/ long after 1.1 exists.
+          keep_files: true
+          commit_message: 'ota: ${{ steps.version.outputs.version }} (runtime ${{ steps.version.outputs.runtime }})'
 
       - name: Prebuild Android project
         run: npx expo prebuild --platform android --clean
@@ -211,8 +253,11 @@ jobs:
           path: ${{ steps.apk.outputs.path }}
           retention-days: 90
 
-      - name: Remove the generated native project before committing
-        run: rm -rf android version.json
+      # `ota/` and `.ota-export/` are gitignored, but removed anyway: the
+      # release commit must carry the bump and nothing else, and an ignore rule
+      # is one edit away from not covering them.
+      - name: Remove the generated native project and OTA tree before committing
+        run: rm -rf android version.json ota .ota-export
 
       - name: Commit and tag the version bump
         env:

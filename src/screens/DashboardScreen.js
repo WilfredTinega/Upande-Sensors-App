@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { Card, EmptyState, ErrorView, StatusChip } from '../components/ui';
 import { Skeleton, SkeletonSensorCard } from '../components/Skeleton';
@@ -14,13 +15,21 @@ import {
   valuesKey,
 } from '../api/liveSite';
 import { useDashboard } from '../context/DashboardContext';
+import { goToSensorDetail } from '../navigation/ref';
 import { useQuery } from '../hooks/useQuery';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { isStale, relativeTime } from '../utils/dates';
 import { sortByMeasure } from '../utils/measures';
 
-/** One physical node, with every parameter it reports. */
-function SensorCard({ sensor, live, unitForType, pending }) {
+/**
+ * One physical node, with every parameter it reports.
+ *
+ * The whole card opens that sensor's own chart. A live value answers "what is
+ * it now"; the question it provokes is "and what has it been doing" — which
+ * used to mean going to Dashboard and narrowing a site-wide chart down to this
+ * one sensor by hand.
+ */
+function SensorCard({ sensor, live, unitForType, pending, site }) {
   const t = useTheme();
   /**
    * Memoised because the fallbacks are fresh array literals: a sensor reporting
@@ -40,84 +49,108 @@ function SensorCard({ sensor, live, unitForType, pending }) {
   const stale = isStale(latestTs);
 
   return (
-    <Card style={{ marginBottom: spacing.md }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: spacing.sm }}>
-        <View style={{ flex: 1 }}>
-          {/* No registry sensor_type line: a node reporting temperature,
-              humidity and soil temperature carries a single type in the
-              registry, so labelling this card "Humidity" contradicts the three
-              measures listed right below it. Each value names its own measure. */}
-          <Text numberOfLines={1} style={[type.heading, { color: t.textPrimary }]}>
-            {sensor.sensor_name}
-          </Text>
-        </View>
-        {params.length ? (
-          <StatusChip
-            tone={stale ? 'warning' : 'good'}
-            label={
-              stale
-                ? `Stale · ${relativeTime(latestTs) || 'unknown'}`
-                : relativeTime(latestTs) || 'Live'
-            }
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${sensor.sensor_name}. Opens its chart`}
+      onPress={() =>
+        goToSensorDetail({
+          site: sensor.site_name || site,
+          sensorName: sensor.sensor_name,
+          sensorType: sensor.sensor_type,
+        })
+      }
+      // The gap between cards belongs to the Pressable, not to the Card inside
+      // it: as the Card's own margin it grew the touch target downwards, so a
+      // tap in the space *between* two cards opened the one above.
+      style={({ pressed }) => ({ marginBottom: spacing.md, opacity: pressed ? 0.75 : 1 })}
+    >
+      <Card>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: spacing.sm }}>
+          <View style={{ flex: 1 }}>
+            {/* No registry sensor_type line: a node reporting temperature,
+                humidity and soil temperature carries a single type in the
+                registry, so labelling this card "Humidity" contradicts the three
+                measures listed right below it. Each value names its own measure. */}
+            <Text numberOfLines={1} style={[type.heading, { color: t.textPrimary }]}>
+              {sensor.sensor_name}
+            </Text>
+          </View>
+          {params.length ? (
+            <StatusChip
+              tone={stale ? 'warning' : 'good'}
+              label={
+                stale
+                  ? `Stale · ${relativeTime(latestTs) || 'unknown'}`
+                  : relativeTime(latestTs) || 'Live'
+              }
+            />
+          ) : pending ? (
+            // The values are still on their way. Saying "No data" here would be
+            // a claim about the sensor rather than about this request.
+            <Skeleton width={64} height={20} radius={radius.pill} />
+          ) : (
+            <StatusChip tone="serious" label="No data" />
+          )}
+          {/* Says the card is a door, not just a panel. Muted, because the
+              chevron is an affordance rather than a value. */}
+          <Ionicons
+            name="chevron-forward"
+            size={16}
+            color={t.textMuted}
+            style={{ alignSelf: 'center' }}
           />
-        ) : pending ? (
-          // The values are still on their way. Saying "No data" here would be
-          // a claim about the sensor rather than about this request.
-          <Skeleton width={64} height={20} radius={radius.pill} />
-        ) : (
-          <StatusChip tone="serious" label="No data" />
-        )}
-      </View>
-
-      {!params.length && pending ? (
-        <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
-          <Skeleton height={14} width="55%" />
-          <Skeleton height={14} width="40%" />
         </View>
-      ) : null}
 
-      {params.length ? (
-        <View
-          style={{
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            gap: spacing.md,
-            marginTop: spacing.md,
-            paddingTop: spacing.md,
-            borderTopWidth: StyleSheet.hairlineWidth,
-            borderTopColor: t.border,
-          }}
-        >
-          {params.map((param, i) => {
-            const value = Number(param.value);
-            // `get_live_readings` returns uom only on its Live Sensor Data
-            // path; the Sensor Reading fallback sends "". Sensor Settings has
-            // the unit either way.
-            const unit = param.uom || unitForType(param.type) || unitForType(sensor.sensor_type);
-            return (
-              <View key={`${param.type || 'value'}-${i}`} style={{ minWidth: 76 }}>
-                <Text numberOfLines={1} style={[type.caption, { color: t.textSecondary }]}>
-                  {param.type || 'Reading'}
-                </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 3 }}>
-                  <Text
-                    style={[
-                      type.title,
-                      { color: Number.isFinite(value) ? t.textPrimary : t.textMuted },
-                    ]}
-                  >
-                    {Number.isFinite(value) ? formatTick(value) : '—'}
+        {!params.length && pending ? (
+          <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
+            <Skeleton height={14} width="55%" />
+            <Skeleton height={14} width="40%" />
+          </View>
+        ) : null}
+
+        {params.length ? (
+          <View
+            style={{
+              flexDirection: 'row',
+              flexWrap: 'wrap',
+              gap: spacing.md,
+              marginTop: spacing.md,
+              paddingTop: spacing.md,
+              borderTopWidth: StyleSheet.hairlineWidth,
+              borderTopColor: t.border,
+            }}
+          >
+            {params.map((param, i) => {
+              const value = Number(param.value);
+              // `get_live_readings` returns uom only on its Live Sensor Data
+              // path; the Sensor Reading fallback sends "". Sensor Settings has
+              // the unit either way.
+              const unit = param.uom || unitForType(param.type) || unitForType(sensor.sensor_type);
+              return (
+                <View key={`${param.type || 'value'}-${i}`} style={{ minWidth: 76 }}>
+                  <Text numberOfLines={1} style={[type.caption, { color: t.textSecondary }]}>
+                    {param.type || 'Reading'}
                   </Text>
-                  {unit && Number.isFinite(value) ? (
-                    <Text style={[type.caption, { color: t.textSecondary }]}>{unit}</Text>
-                  ) : null}
+                  <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 3 }}>
+                    <Text
+                      style={[
+                        type.title,
+                        { color: Number.isFinite(value) ? t.textPrimary : t.textMuted },
+                      ]}
+                    >
+                      {Number.isFinite(value) ? formatTick(value) : '—'}
+                    </Text>
+                    {unit && Number.isFinite(value) ? (
+                      <Text style={[type.caption, { color: t.textSecondary }]}>{unit}</Text>
+                    ) : null}
+                  </View>
                 </View>
-              </View>
-            );
-          })}
-        </View>
-      ) : null}
-    </Card>
+              );
+            })}
+          </View>
+        ) : null}
+      </Card>
+    </Pressable>
   );
 }
 
@@ -313,6 +346,7 @@ export function DashboardScreen() {
               live={live[sensor.sensor_name]}
               unitForType={unitForType}
               pending={valuesPending}
+              site={site}
             />
           ))
         : null}

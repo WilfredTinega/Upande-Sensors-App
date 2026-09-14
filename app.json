@@ -6,8 +6,8 @@
     "runtimeVersion": "1.0",
     "updates": {
       "enabled": true,
-      "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/1.0/manifest.json",
-      "checkAutomatically": "NEVER",
+      "url": "https://sensor.upande.com/api/method/upande_sensors.api.ota.manifest",
+      "checkAutomatically": "ON_LOAD",
       "fallbackToCacheTimeout": 0
     },
     "orientation": "portrait",
@@ -40,7 +40,8 @@
       "favicon": "./assets/favicon.png"
     },
     "extra": {
-      "githubRepo": "WilfredTinega/Upande-Sensors-App"
+      "githubRepo": "WilfredTinega/Upande-Sensors-App",
+      "otaBaseUrl": "https://wilfredtinega.github.io/Upande-Sensors-App/ota"
     },
     "plugins": [
       "./plugins/withReleaseSigning",
@@ -51,6 +52,14 @@
         "expo-local-authentication",
         {
           "faceIDPermission": "Allow Upande Sensors to unlock with Face ID."
+        }
+      ],
+      "expo-sharing",
+      "expo-status-bar",
+      [
+        "expo-notifications",
+        {
+          "color": "#2a78d6"
         }
       ]
     ]

@@ -5,6 +5,8 @@ import { client, normaliseBaseUrl, NO_BASE_URL, FrappeError } from '../api/clien
 import { invalidate } from '../api/cache';
 import { getBiometricCapability, promptBiometric } from '../utils/biometrics';
 import { getSession, getUserProfile } from '../api/endpoints';
+import { INSTALL_REASONS, reportInstall } from '../api/install';
+import { unregisterPushNotifications } from '../api/push';
 import { flushRouteHistory } from '../utils/routeHistory';
 
 const KEY_SID = 'upande.sid';
@@ -14,6 +16,23 @@ const KEY_PASSWORD = 'upande.pwd';
 const KEY_BIOMETRIC = 'upande.biometric';
 
 const AuthContext = createContext(null);
+
+/**
+ * Record which build this account is running on this phone.
+ *
+ * Called on every successful authentication — the password form, a biometric
+ * unlock, and the stored-credential re-login on cold start — because a sign-in
+ * is the moment an account becomes attached to a device, and on a shared phone
+ * it is the only moment that pairing can be observed.
+ *
+ * Never awaited: signing in must not wait for bookkeeping, and must not fail
+ * because of it. `reportInstall` already swallows everything it can go wrong
+ * on; the `catch` is for the rejection it is not supposed to be able to
+ * produce.
+ */
+function noteSignIn(account) {
+  reportInstall({ reason: INSTALL_REASONS.LOGIN, user: account || null }).catch(() => {});
+}
 
 /**
  * Session state for the whole app.
@@ -88,6 +107,14 @@ export function AuthProvider({ children }) {
      * survivable — the queue is written to disk and goes out next sign-in.
      */
     await flushRouteHistory().catch(() => {});
+
+    /**
+     * Same deadline for the push token: the unregister request has to be made
+     * by the account that registered it, so it goes before `logout()`. Left
+     * registered, the phone would keep receiving another account's alerts —
+     * whoever signs in next on it, or nobody. Never blocks the sign-out.
+     */
+    await unregisterPushNotifications().catch(() => {});
 
     if (remote) await client.logout();
     else client.setSession(null);
@@ -203,8 +230,10 @@ export function AuthProvider({ children }) {
             const session = await client.login(storedUser, storedPwd);
             if (cancelled) return;
             await SecureStore.setItemAsync(KEY_SID, session.sid);
-            setUser({ name: await resolveUserName(storedUser), fullName: session.fullName });
+            const name = await resolveUserName(storedUser);
+            setUser({ name, fullName: session.fullName });
             setStatus('signedIn');
+            noteSignIn(name);
             return;
           } catch {
             /* credentials no longer valid — fall through to signed out */
@@ -283,6 +312,7 @@ export function AuthProvider({ children }) {
         setUser({ name: resolvedName, fullName: session.fullName });
         setLockedUser(null);
         setStatus('signedIn');
+        noteSignIn(resolvedName);
         return true;
       } catch (err) {
         const message =
@@ -331,9 +361,11 @@ export function AuthProvider({ children }) {
     try {
       const session = await client.login(storedUser, storedPwd);
       await SecureStore.setItemAsync(KEY_SID, session.sid);
-      setUser({ name: await resolveUserName(storedUser), fullName: session.fullName });
+      const name = await resolveUserName(storedUser);
+      setUser({ name, fullName: session.fullName });
       setLockedUser(null);
       setStatus('signedIn');
+      noteSignIn(name);
       return true;
     } catch (err) {
       setError(

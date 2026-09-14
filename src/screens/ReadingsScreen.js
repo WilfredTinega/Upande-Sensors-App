@@ -69,7 +69,7 @@ function Cell({ flex, children, align = 'left', muted, mono }) {
 
 export function ReadingsScreen() {
   const t = useTheme();
-  const { site, sitesLoading, sitesError, unitForType, filtersLocked, sitePending } =
+  const { site, sitesLoading, sitesError, unitForType, filtersLocked, sitePending, tabTag } =
     useDashboard();
 
   const [rangeKey, setRangeKey] = useState('today');
@@ -79,13 +79,23 @@ export function ReadingsScreen() {
 
   const { dateFrom, dateTo } = useMemo(() => rangeToDates(rangeKey), [rangeKey]);
 
-  const filters = useMemo(() => ({ site, dateFrom, dateTo }), [site, dateFrom, dateTo]);
+  /**
+   * `tabTag` scopes the table to the dashboard chosen in the sidebar, the same
+   * as the charts. Without it this screen listed every sensor at the site while
+   * the chart one tab away listed a subset of them, and the two disagreed about
+   * what "this dashboard" means. It is part of `filters`, so the Excel export
+   * below exports the table the reader is actually looking at.
+   */
+  const filters = useMemo(
+    () => ({ site, dateFrom, dateTo, tabTag }),
+    [site, dateFrom, dateTo, tabTag],
+  );
 
   // Any filter change invalidates the page number — page 7 of the old result
   // set is meaningless against the new one.
   useEffect(() => {
     setPage(0);
-  }, [site, dateFrom, dateTo]);
+  }, [site, dateFrom, dateTo, tabTag]);
 
   // The page and its total arrive together. They used to be two queries against
   // two endpoints, so every page turn cost a second round trip to re-count a
