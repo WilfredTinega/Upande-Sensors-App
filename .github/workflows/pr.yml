@@ -94,6 +94,11 @@ jobs:
           java-version: 17
 
       - uses: android-actions/setup-android@v3
+        # The action installs the long-removed `tools` package by default, which
+        # now fails sdkmanager outright. Gradle fetches the platform and build
+        # tools it needs on its own.
+        with:
+          packages: platform-tools
 
       - name: Install dependencies
         run: npm ci

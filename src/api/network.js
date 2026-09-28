@@ -66,6 +66,40 @@ export function subscribeToNetwork(fn) {
   return () => listeners.delete(fn);
 }
 
+/**
+ * Endpoints that exist only to answer "is there internet?" with a 204. Any
+ * answer at all is enough, so a captive portal's redirect still counts as a
+ * connection — it is the server that is out of reach, not the internet.
+ */
+const INTERNET_PROBES = [
+  'https://connectivitycheck.gstatic.com/generate_204',
+  'https://www.cloudflare.com/cdn-cgi/trace',
+];
+const PROBE_TIMEOUT_MS = 5000;
+
+async function probe(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    await fetch(url, { method: 'HEAD', cache: 'no-store', signal: controller.signal });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Whether the device can reach the internet at all, as opposed to our server.
+ * Used only after a request to the server has already failed, to tell the
+ * person which of the two is actually wrong.
+ */
+export async function hasInternet() {
+  const results = await Promise.all(INTERNET_PROBES.map(probe));
+  return results.some(Boolean);
+}
+
 /** Forget everything — a server change makes past evidence irrelevant. */
 export function resetNetworkState() {
   consecutiveFailures = 0;

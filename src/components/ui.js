@@ -738,7 +738,7 @@ export function ErrorView({ error, onRetry }) {
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
         <Text style={{ color: tone, fontSize: 12 }}>■</Text>
-        <Text style={[type.heading, { color: t.textPrimary }]}>{deploying ? 'Deploying' : 'Couldn’t load'}</Text>
+        <Text style={[type.heading, { color: t.textPrimary }]}>{deploying ? 'Server updating' : 'Couldn’t load'}</Text>
       </View>
       <Text style={[type.body, { color: t.textSecondary, lineHeight: 20 }]}>{message}</Text>
       {onRetry ? <Button label="Try again" tone="ghost" onPress={onRetry} /> : null}

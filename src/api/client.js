@@ -26,7 +26,7 @@
  * against the wrong farm. The app starts with no server and asks for one on
  * first launch; `''` is the honest representation of "not configured yet".
  */
-import { reportReachable, reportUnreachable, resetNetworkState } from './network';
+import { hasInternet, reportReachable, reportUnreachable, resetNetworkState } from './network';
 
 export const NO_BASE_URL = '';
 
@@ -313,14 +313,20 @@ export class FrappeClient {
        * response, when a typo is the likely cause. After that the address is
        * demonstrably correct, and telling somebody to check it while their train
        * goes through a tunnel sends them to re-type a URL that was never wrong.
+       *
+       * Either way, if the internet itself is down, say exactly that — the
+       * server address is irrelevant to someone with no connection at all.
        */
       reportUnreachable();
-      throw new FrappeError(
-        this.reachedOnce
-          ? 'No connection to the server. Check your internet connection.'
-          : `Cannot reach ${this.baseUrl}. Check the address and your internet connection.`,
-        { status: 0, kind: 'offline' },
-      );
+      let message;
+      if (!(await hasInternet())) {
+        message = 'No internet connection. Check your Wi-Fi or mobile data and try again.';
+      } else if (this.reachedOnce) {
+        message = 'Cannot connect to the server right now. Please try again shortly.';
+      } else {
+        message = `Cannot reach ${this.baseUrl}. Check the server address.`;
+      }
+      throw new FrappeError(message, { status: 0, kind: 'offline' });
     }
     cleanup();
 
@@ -347,12 +353,16 @@ export class FrappeClient {
       // A gateway status with no parsed JSON body is the proxy talking, not
       // the Frappe app — that combination is what a mid-deploy bench restart
       // looks like, and gets its own message rather than the generic one.
-      const deploying = GATEWAY_STATUSES.has(response.status) && !payload;
-      const message =
-        extractServerMessage(payload) ||
-        (deploying
-          ? 'Deploying an update to the server. This usually takes a minute or two.'
-          : response.status === 404
+      // Frappe's own `SessionStopped` is the same situation from the app side:
+      // the site is in maintenance mode while a migrate runs, and its raw
+      // "Session Stopped" text means nothing to the person reading it.
+      const deploying =
+        (GATEWAY_STATUSES.has(response.status) && !payload) ||
+        payload?.exc_type === 'SessionStopped';
+      const message = deploying
+        ? 'The server is updating. This usually takes a minute or two.'
+        : extractServerMessage(payload) ||
+          (response.status === 404
             ? 'Endpoint not found on this instance.'
             : `Request failed (${response.status}).`);
       throw new FrappeError(message, {
