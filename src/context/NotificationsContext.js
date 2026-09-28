@@ -114,6 +114,18 @@ export function NotificationsProvider({ children }) {
   const canCount = useRef(false);
   canCount.current = ready && supported && Boolean(user?.name);
 
+  /**
+   * A mark that arrived before the context could act on it.
+   *
+   * The bell is tappable from the first frame, and the stored cursor is read
+   * from SecureStore asynchronously, so opening the list in that gap left
+   * `markOpened` able to zero the badge but not to move the watermark. The
+   * next poll then counted the very alerts that had just been read and the
+   * badge refilled. Remembered here and honoured below, the moment there is
+   * something to honour it with.
+   */
+  const pendingMark = useRef(false);
+
   const persistCursor = useCallback((latest) => {
     const next = latest && String(latest).trim() ? String(latest).trim() : null;
     // An empty `latest` is a scope with no alerts yet. The previous cursor
@@ -155,7 +167,25 @@ export function NotificationsProvider({ children }) {
    */
   useEffect(() => {
     if (!ready || !supported || !user?.name) return undefined;
-    refreshCount();
+    if (pendingMark.current) {
+      // Deferred from `markOpened`. No `since`: the list was opened, so the
+      // newest row the server has right now is the watermark — and counting
+      // first would only re-report what was read.
+      pendingMark.current = false;
+      const mine = generation.current;
+      getAlertsCount()
+        .then((answer) => {
+          if (mine !== generation.current) return;
+          persistCursor(answer?.latest);
+          setUnread(0);
+        })
+        .catch(() => {
+          // Same rule as a failed poll: the cursor stays put and the next one
+          // reports the same alerts, which is the truthful outcome.
+        });
+    } else {
+      refreshCount();
+    }
     const id = setInterval(() => {
       if (AppState.currentState === 'active') refreshCount();
     }, POLL_MS);
@@ -166,7 +196,7 @@ export function NotificationsProvider({ children }) {
       clearInterval(id);
       sub?.remove?.();
     };
-  }, [ready, supported, user?.name, refreshCount]);
+  }, [ready, supported, user?.name, refreshCount, persistCursor]);
 
   /**
    * A push landing is the one moment the count is known to have changed, so
@@ -203,6 +233,7 @@ export function NotificationsProvider({ children }) {
     generation.current += 1;
     const mine = generation.current;
     setUnread(0);
+    if (!canCount.current) pendingMark.current = true;
     if (canCount.current) {
       getAlertsCount({ since: previous })
         .then((answer) => {

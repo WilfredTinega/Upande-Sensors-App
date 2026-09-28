@@ -254,6 +254,19 @@ function buildHtml(t) {
       attribution: next.attribution, maxZoom: next.maxZoom,
       tileSize: next.tileSize, zoomOffset: next.zoomOffset
     }).addTo(ensureMap());
+    // Whether the basemap is actually arriving. Without this a phone with no
+    // internet — or a blocked tile host, or a rejected Mapbox token — draws
+    // the pins on empty grey and says nothing: the sensors are all there and
+    // the map behind them simply never appears. Reported once per state
+    // change, not per tile, or a failed pan would post hundreds.
+    var tilesOk = null;
+    function reportTiles(ok) {
+      if (tilesOk === ok) return;
+      tilesOk = ok;
+      post({ type: 'tiles', ok: ok });
+    }
+    tiles.on('tileerror', function () { reportTiles(false); });
+    tiles.on('tileload', function () { reportTiles(true); });
   }
   // Built with createElement + textContent only: the strings are the server's.
   function popupFor(s) {
@@ -406,6 +419,14 @@ export function SensorMapScreen({ route }) {
    */
   const [satellite, setSatellite] = useState(false);
 
+  /**
+   * The basemap could not be fetched — no internet, a blocked tile host, or a
+   * token the provider rejected. The pins are the app's own data and still
+   * draw; only the picture behind them is missing, so this says that rather
+   * than replacing the whole screen with an error.
+   */
+  const [tilesFailed, setTilesFailed] = useState(false);
+
   const sensors = useMemo(
     () => (Array.isArray(query.data?.sensors) ? query.data.sensors : EMPTY_SENSORS).filter(hasCoordinates),
     [query.data],
@@ -511,6 +532,8 @@ export function SensorMapScreen({ route }) {
       if (msg?.type === 'ready') {
         pageReady.current = true;
         if (query.data) push();
+      } else if (msg?.type === 'tiles') {
+        setTilesFailed(!msg.ok);
       } else if (msg?.type === 'open' && msg.name) {
         const hit = sensors.find((s) => s.sensor_name === msg.name);
         if (!hit) return;
@@ -595,7 +618,11 @@ export function SensorMapScreen({ route }) {
         <View style={{ flex: 1, justifyContent: 'center' }}>
           <EmptyState
             title="The sensor list needs a newer server"
-            message="This site's upande_sensors does not have the sensor_map endpoint yet. Deploy the app update or the Server Scripts under server/ and the list appears here."
+            // Named for the person holding the phone, who is standing in a
+            // greenhouse and cannot deploy anything. It used to name the
+            // endpoint and tell them to deploy the Server Scripts under
+            // server/ — instructions for somebody who is not there.
+            message="This site's server is older than the app. Ask an administrator to update it and the list appears here."
             // Coordinate capture is a SEPARATE endpoint from the map/list read,
             // and the two are deployed independently — a site missing
             // `sensor_map` can still have `set_sensor_location`. Offering the
@@ -645,6 +672,32 @@ export function SensorMapScreen({ route }) {
             style={{ flex: 1, backgroundColor: t.background }}
           />
 
+          {tilesFailed ? (
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                top: spacing.sm,
+                left: spacing.sm,
+                right: 52,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: spacing.sm,
+                paddingVertical: spacing.sm,
+                paddingHorizontal: spacing.md,
+                borderRadius: radius.md,
+                backgroundColor: t.surface,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: t.status.warning,
+              }}
+            >
+              <Ionicons name="cloud-offline-outline" size={16} color={t.status.warning} />
+              <Text numberOfLines={2} style={[type.caption, { color: t.textPrimary, flex: 1 }]}>
+                Map imagery could not be loaded. The pins are still where they are.
+              </Text>
+            </View>
+          ) : null}
+
           {/* Streets / satellite, floating over the top-right corner of the
               map itself — a map-view control, not a page action, so it sits
               on the map the way the zoom buttons and the attribution line do,
@@ -653,7 +706,12 @@ export function SensorMapScreen({ route }) {
             accessibilityRole="button"
             accessibilityLabel={satellite ? 'Switch to streets view' : 'Switch to satellite view'}
             accessibilityState={{ selected: satellite }}
-            onPress={() => setSatellite((v) => !v)}
+            onPress={() => {
+              // A different provider is a different verdict: clear it here and
+              // let the new layer report for itself.
+              setTilesFailed(false);
+              setSatellite((v) => !v);
+            }}
             style={({ pressed }) => ({
               position: 'absolute',
               top: spacing.sm,
