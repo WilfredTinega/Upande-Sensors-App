@@ -56,8 +56,17 @@ import { downloadApk, launchInstaller } from '../utils/installApk';
 
 const UpdateContext = createContext(null);
 
-/** The running build, as stamped into app.json by the release workflow. */
-export const APP_VERSION = Constants.expoConfig?.version ?? null;
+/**
+ * The running build. Under an OTA bundle that is the bundle's own version,
+ * read from its manifest: bundles published before `extra.expoClient` was
+ * added leave `Constants.expoConfig` reporting the APK's version, and a phone
+ * that thinks it is older than it is keeps "updating" to what it already runs.
+ */
+export const APP_VERSION =
+  Updates.manifest?.extra?.expoClient?.version ??
+  Updates.manifest?.extra?.appVersion ??
+  Constants.expoConfig?.version ??
+  null;
 
 const IS_DEV = typeof __DEV__ !== 'undefined' && __DEV__;
 
@@ -277,18 +286,24 @@ export function UpdateProvider({ children }) {
    * updating altogether — the opposite of the fallback this function exists to
    * make safe. Every failure is therefore a decline: the APK is the answer, and
    * choosing to try the fast path first can never cost the user the update.
+   *
+   * But "the server has nothing newer" is not a failure: it means this bundle
+   * IS the latest, and GitHub only looked newer because the running version was
+   * misreported. Treating that as a decline is what sent phones that were
+   * already up to date off to download the whole APK. Hence three answers:
+   * 'applied', 'current' (nothing to do) and 'failed' (the APK may help).
    */
   const applyJsUpdate = useCallback(async () => {
-    if (!Updates.isEnabled) return false;
+    if (!Updates.isEnabled) return 'failed';
     try {
       const found = await Updates.checkForUpdateAsync();
-      if (!found?.isAvailable) return false;
+      if (!found?.isAvailable) return 'current';
       await Updates.fetchUpdateAsync();
       // Everything after this is on the other side of a restart.
       await Updates.reloadAsync();
-      return true;
+      return 'applied';
     } catch {
-      return false;
+      return 'failed';
     }
   }, []);
 
@@ -313,12 +328,22 @@ export function UpdateProvider({ children }) {
          * The fast path, tried first for anything inside the same runtime.
          *
          * If it succeeds the app has already restarted and nothing below runs.
-         * If it declines — no bundle published, or updates disabled in this
-         * build — the APK is still there as the answer, so choosing the fast
-         * path can never cost the user the update.
+         * If the server says this bundle is already the newest, there is
+         * nothing to do. If it fails — server down, or updates disabled in this
+         * build — a manual press still falls back to the APK.
          */
-        if (release.kind === UPDATE_KINDS.JS && (await applyJsUpdate())) {
-          return true;
+        if (release.kind === UPDATE_KINDS.JS) {
+          const js = await applyJsUpdate();
+          if (js === 'applied') return true;
+          if (js === 'current') {
+            // Already running the newest bundle; drop the stale "available".
+            setUpdate((u) => (u ? { ...u, available: false } : u));
+            return false;
+          }
+          // A same-runtime release never needs 74MB on its own initiative: a
+          // flaky OTA check is retried on the next foreground. Only a press of
+          // the button falls back to the full APK.
+          if (auto) return false;
         }
 
         if (!release.downloadUrl) {
