@@ -167,21 +167,25 @@ export function UpdateProvider({ children }) {
    * Never in development or Expo Go: `Updates.isEnabled` is false there, and a
    * Metro reload is the update mechanism.
    */
+  // Resolves true once a newer bundle is downloaded and the restart into it is
+  // under way, so the Check for updates button can stop there.
   const checkOta = useCallback(
     async ({ force = false } = {}) => {
-      if (IS_DEV || !Updates.isEnabled) return;
-      if (otaBusy.current || otaApplied.current) return;
-      if (!force && Date.now() - otaLastCheck.current < OTA_CHECK_INTERVAL_MS) return;
+      if (IS_DEV || !Updates.isEnabled) return false;
+      if (otaBusy.current || otaApplied.current) return false;
+      if (!force && Date.now() - otaLastCheck.current < OTA_CHECK_INTERVAL_MS) return false;
       otaBusy.current = true;
       otaLastCheck.current = Date.now();
       setOtaChecking(true);
       try {
         const found = await Updates.checkForUpdateAsync();
-        if (!found?.isAvailable) return;
+        if (!found?.isAvailable) return false;
         await Updates.fetchUpdateAsync();
-        await applyOta();
+        applyOta();
+        return true;
       } catch (err) {
         if (IS_DEV) console.log('[ota] check', err?.message);
+        return false;
       } finally {
         otaBusy.current = false;
         setOtaChecking(false);
@@ -237,6 +241,11 @@ export function UpdateProvider({ children }) {
     setChecking(true);
     setError(null);
     try {
+      // The JS update first. Only x.y.0 releases carry an APK and are GitHub's
+      // "latest", so a JS-only release (x.y.1+) never shows up in the GitHub
+      // check below -- asked alone, it answered "latest" while a bundle sat
+      // waiting on the update server.
+      if (await checkOta({ force: true })) return null;
       const result = await checkForUpdate(APP_VERSION);
       setUpdate(result);
       return result;
@@ -250,7 +259,7 @@ export function UpdateProvider({ children }) {
     } finally {
       setChecking(false);
     }
-  }, []);
+  }, [checkOta]);
 
   /**
    * Download a release and hand it to Android's installer.
