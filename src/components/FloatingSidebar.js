@@ -354,7 +354,10 @@ export function FloatingSidebar() {
               >
                 {user?.fullName || user?.name || 'Signed in'}
               </Text>
-              <Text numberOfLines={1} style={[type.caption, { color: t.textMuted }]}>
+              <Text
+                numberOfLines={1}
+                style={[type.caption, { color: t.textPrimary, fontWeight: '700', fontFamily: font('700') }]}
+              >
                 {baseUrl?.replace(/^https?:\/\//, '')}
               </Text>
             </View>
