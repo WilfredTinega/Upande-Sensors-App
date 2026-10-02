@@ -57,18 +57,6 @@ jobs:
           node-version: 20
           cache: npm
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - uses: android-actions/setup-android@v3
-        # The action installs the long-removed `tools` package by default, which
-        # now fails sdkmanager outright. Gradle fetches the platform and build
-        # tools it needs on its own.
-        with:
-          packages: platform-tools
-
       # Signing is optional. With all four secrets present the APK is signed with
       # the upload key; without them the build still runs and Gradle falls back
       # to the debug key, which installs fine for sideloading but cannot go to
@@ -117,6 +105,17 @@ jobs:
             echo "version_code=$(jq -r .versionCode version.json)"
             echo "bump=$(jq -r .bump version.json)"
             echo "runtime=$(jq -r .runtimeVersion version.json)"
+            # x.y.0 opens a new runtime and is the only release that needs an
+            # APK. Every other version (x.y.1, x.y.2, ...) is JavaScript on a
+            # runtime phones already have, so it ships as an OTA bundle alone --
+            # an APK on it would only compete with the bundle in the app's
+            # update check and send phones off to download ~74MB for nothing.
+            version="$(jq -r .version version.json)"
+            if [ "${version##*.}" = "0" ]; then
+              echo "release=apk"
+            else
+              echo "release=ota"
+            fi
           } >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
@@ -129,30 +128,30 @@ jobs:
 
       # ── Over-the-air JS update ───────────────────────────────────────────────
       #
-      # A patch release cannot contain native changes, so alongside the APK it
-      # also ships as a JS bundle that devices on the same runtime pick up on
-      # their next launch — see docs/OTA.md. Only for a patch: a minor or major
-      # bump moves the runtime, and no device is on the new runtime yet to
-      # receive a bundle for it.
+      # A patch release (x.y.1 and up) cannot contain native changes, so it ships
+      # ONLY as a JS bundle that devices on the same runtime pick up on their
+      # next launch — see docs/OTA.md. No APK is built for it. An x.y.0 release
+      # moves the runtime, no device is on it yet to receive a bundle, and it
+      # ships as an APK instead.
       #
       # Before the prebuild, not after: `expo export` reads app.json, and the
       # prebuild rewrites package.json's scripts in a way that would otherwise
       # be exported into the bundle's metadata.
       #
       # Works under `workflow_dispatch` too: choosing `patch` (or `auto`, which
-      # is a patch) publishes a bundle; `minor`/`major` skip this and ship the
-      # APK alone.
+      # is a patch unless it rolls over to x.y.0) publishes a bundle;
+      # `minor`/`major` skip this and ship the APK alone.
       #
       # GitHub Pages must be enabled on the repository, serving the `gh-pages`
       # branch from `/ (root)`. That is a repository setting the workflow cannot
       # change for itself; until it is set, the branch is written but nothing
       # serves it and devices simply find no update.
       - name: Build the JS update
-        if: steps.version.outputs.bump == 'patch'
+        if: steps.version.outputs.release == 'ota'
         run: npm run ota:build
 
       - name: Publish the JS update to GitHub Pages
-        if: steps.version.outputs.bump == 'patch'
+        if: steps.version.outputs.release == 'ota'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -163,13 +162,31 @@ jobs:
           keep_files: true
           commit_message: 'ota: ${{ steps.version.outputs.version }} (runtime ${{ steps.version.outputs.runtime }})'
 
+      # ── x.y.0: native build ─────────────────────────────────────────────────
+
+      - uses: actions/setup-java@v4
+        if: steps.version.outputs.release == 'apk'
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+        if: steps.version.outputs.release == 'apk'
+        # The action installs the long-removed `tools` package by default, which
+        # now fails sdkmanager outright. Gradle fetches the platform and build
+        # tools it needs on its own.
+        with:
+          packages: platform-tools
+
       - name: Prebuild Android project
+        if: steps.version.outputs.release == 'apk'
         run: npx expo prebuild --platform android --clean
 
       - uses: gradle/actions/setup-gradle@v4
+        if: steps.version.outputs.release == 'apk'
 
       - name: Decode upload keystore
-        if: steps.signing.outputs.signed == 'true'
+        if: steps.version.outputs.release == 'apk' && steps.signing.outputs.signed == 'true'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
@@ -177,6 +194,7 @@ jobs:
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
 
       - name: Assemble release APK
+        if: steps.version.outputs.release == 'apk'
         working-directory: android
         env:
           SIGNED: ${{ steps.signing.outputs.signed }}
@@ -198,6 +216,7 @@ jobs:
           fi
 
       - name: Check the signing certificate
+        if: steps.version.outputs.release == 'apk'
         env:
           SIGNED: ${{ steps.signing.outputs.signed }}
           EXPECTED_SHA256: ${{ secrets.ANDROID_KEY_SHA256 }}
@@ -242,6 +261,7 @@ jobs:
           fi
 
       - name: Name the artifact after the release
+        if: steps.version.outputs.release == 'apk'
         id: apk
         run: |
           set -euo pipefail
@@ -252,6 +272,7 @@ jobs:
           echo "name=${dest%.apk}" >> "$GITHUB_OUTPUT"
 
       - name: Always keep the APK, even if publishing fails
+        if: steps.version.outputs.release == 'apk'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.apk.outputs.name }}
@@ -290,7 +311,7 @@ jobs:
       # Whoever downloads the APK is the one who has to trust it, so the signing
       # status belongs in the release body, not just in the build log.
       - name: Note debug signing in the release body
-        if: steps.signing.outputs.signed != 'true'
+        if: steps.version.outputs.release == 'apk' && steps.signing.outputs.signed != 'true'
         run: |
           {
             echo
@@ -302,7 +323,8 @@ jobs:
             echo "> it will not install over a build signed with a different key."
           } >> RELEASE_NOTES.md
 
-      - name: Publish GitHub Release
+      - name: Publish GitHub Release (APK)
+        if: steps.version.outputs.release == 'apk'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
@@ -310,18 +332,34 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: ${{ steps.apk.outputs.path }}
           fail_on_unmatched_files: true
+          make_latest: true
+
+      - name: Publish GitHub Release (OTA)
+        if: steps.version.outputs.release == 'ota'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Upande Sensors ${{ steps.version.outputs.version }} (OTA)
+          body_path: RELEASE_NOTES.md
+          # No APK on a JS release: keep "latest" on the newest APK, which is
+          # what the app's update check reads (src/api/updates.js).
+          make_latest: false
 
       - name: Job summary
         run: |
           {
             echo "### Released \`${{ steps.version.outputs.tag }}\`"
             echo
-            echo "- versionCode \`${{ steps.version.outputs.version_code }}\`"
-            echo "- APK: \`${{ steps.apk.outputs.path }}\`"
-            if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
-              echo "- Signing: upload key"
+            echo "- versionCode \`${{ steps.version.outputs.version_code }}\`, runtime \`${{ steps.version.outputs.runtime }}\`"
+            if [ "${{ steps.version.outputs.release }}" = "ota" ]; then
+              echo "- Shipped as a JS update only (no APK)"
             else
-              echo "- Signing: **debug key** (no signing secrets configured)"
+              echo "- APK: \`${{ steps.apk.outputs.path }}\`"
+              if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+                echo "- Signing: upload key"
+              else
+                echo "- Signing: **debug key** (no signing secrets configured)"
+              fi
             fi
             echo "- https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
           } >> "$GITHUB_STEP_SUMMARY"

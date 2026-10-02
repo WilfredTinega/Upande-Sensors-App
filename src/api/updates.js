@@ -76,9 +76,18 @@ export function compareVersions(a, b) {
  * `upande_sensors_v<version>.apk` and attaches it to tag `v<version>`, which
  * makes the URL derivable — see "Name the artifact after the release" in
  * .github/workflows/release.yml. If that naming ever changes, this must too.
+ *
+ * Only x.y.0 releases build an APK; x.y.1 and up ship as JS updates alone. So
+ * the APK for any version is its runtime's x.y.0 one.
  */
+function apkVersionOf(version) {
+  const runtime = runtimeVersionOf(version);
+  return runtime ? `${runtime}.0` : version;
+}
+
 function predictedApkUrl(version) {
-  return `https://github.com/${GITHUB_REPO}/releases/download/v${version}/upande_sensors_v${version}.apk`;
+  const v = apkVersionOf(version);
+  return `https://github.com/${GITHUB_REPO}/releases/download/v${v}/upande_sensors_v${v}.apk`;
 }
 
 /** The `.apk` attached to a release, or null when only sources were published. */
@@ -272,7 +281,7 @@ async function fetchLatestReleaseViaAtom() {
     // guess surfaces as a failed download with the release page still one tap
     // away, which beats hiding the button on every rate-limited check.
     downloadUrl: predictedApkUrl(version),
-    assetName: `upande_sensors_v${version}.apk`,
+    assetName: `upande_sensors_v${apkVersionOf(version)}.apk`,
     // Unknown until the download starts — the feed carries no asset metadata,
     // so the size is filled in from Content-Length once bytes begin arriving.
     size: null,
