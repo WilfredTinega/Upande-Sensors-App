@@ -158,7 +158,12 @@ const manifest = {
   createdAt: new Date().toISOString(),
   runtimeVersion,
   launchAsset: {
-    ...assetEntry(android.bundle, 'bundle'),
+    // Keyed by the bundle's own file name, which `expo export` makes unique per
+    // build (index-<hash>). expo-updates reuses any asset whose key it already
+    // has on disk, so the fixed key 'bundle' this used to carry meant a phone
+    // downloaded the code once and then ran that same code under every later
+    // update's version number.
+    ...assetEntry(android.bundle, android.bundle.split(/[\\/]/).pop().replace(/\.[^.]+$/, '')),
     contentType: 'application/javascript',
   },
   assets: (android.assets || []).map((asset) => {
