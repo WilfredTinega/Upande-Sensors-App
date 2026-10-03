@@ -515,10 +515,6 @@ export function SettingsScreen() {
           people a new one exists — nothing else will. Checked on demand, never
           on a timer: GitHub allows 60 unauthenticated calls an hour per IP, and
           a whole office shares one. */}
-      {/* OTA test marker: shipped only as a JS update, so seeing it proves the
-          update reached the phone. Remove after testing. */}
-      <Text style={[type.body, { color: t.text, marginBottom: spacing.sm }]}>wilfred</Text>
-
       <SectionTitle>App updates</SectionTitle>
       <Card style={{ marginBottom: spacing.xl }}>
         <Row label="Installed" value={APP_VERSION} />
