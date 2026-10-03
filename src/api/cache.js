@@ -130,3 +130,20 @@ export function invalidate(prefix) {
     if (key.startsWith(prefix)) store.delete(key);
   }
 }
+
+/**
+ * "Refresh everything" — the Account (avatar) tab press. Every mounted query
+ * registers its refresh here; refreshAll drops the cache and re-runs them all,
+ * resolving once every one has answered (or failed).
+ */
+const refreshers = new Set();
+
+export function onRefreshAll(fn) {
+  refreshers.add(fn);
+  return () => refreshers.delete(fn);
+}
+
+export async function refreshAll() {
+  invalidate();
+  await Promise.allSettled([...refreshers].map((fn) => Promise.resolve().then(fn)));
+}

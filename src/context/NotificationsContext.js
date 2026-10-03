@@ -14,6 +14,7 @@ import * as SecureStore from 'expo-secure-store';
 import { getAlertsCount } from '../api/endpoints';
 import { watchNotificationsReceived } from '../api/push';
 import { useAuth } from './AuthContext';
+import { onRefreshAll } from '../api/cache';
 
 /**
  * The read cursor: the `creation` of the newest alert the server knew of the
@@ -158,6 +159,9 @@ export function NotificationsProvider({ children }) {
       }
     }
   }, [ready, supported, user?.name]);
+
+  // The account avatar's "refresh everything" also refreshes the alert count.
+  useEffect(() => (ready && supported ? onRefreshAll(refreshCount) : undefined), [ready, supported, refreshCount]);
 
   /**
    * Count on arrival, then every minute while the app is on screen, and again
