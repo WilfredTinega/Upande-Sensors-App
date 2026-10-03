@@ -521,8 +521,10 @@ export function SettingsScreen() {
 
         {update ? (
           <>
+            {/* GitHub's latest release is the newest APK: JS updates (x.y.1+)
+                are never marked latest, so this row can trail "Installed". */}
             <Row
-              label="Latest"
+              label="Latest APK"
               value={update.version}
               muted={!update.available}
             />
