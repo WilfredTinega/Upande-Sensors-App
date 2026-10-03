@@ -27,7 +27,7 @@ import { normaliseBaseUrl } from '../api/client';
 import { getServerVersions, getUserRoles } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
 import { useQuery } from '../hooks/useQuery';
-import { UPDATE_ERRORS, formatBytes } from '../api/updates';
+import { UPDATE_ERRORS, compareVersions, formatBytes } from '../api/updates';
 import { INSTALL_ERRORS, openUnknownAppSourcesSettings } from '../utils/installApk';
 import { APP_VERSION, useUpdate } from '../context/UpdateContext';
 import { RELEASES_URL } from '../config';
@@ -521,11 +521,12 @@ export function SettingsScreen() {
 
         {update ? (
           <>
-            {/* GitHub's latest release is the newest APK: JS updates (x.y.1+)
-                are never marked latest, so this row can trail "Installed". */}
+            {/* The newest version known: GitHub's latest release is the newest
+                APK, and JS updates (x.y.1+) are never marked latest -- so once
+                one is installed, it is the newest. Bumps with every update. */}
             <Row
-              label="Latest APK"
-              value={update.version}
+              label="Latest"
+              value={compareVersions(update.version, APP_VERSION) > 0 ? update.version : APP_VERSION}
               muted={!update.available}
             />
             <Text
