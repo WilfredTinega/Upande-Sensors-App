@@ -300,7 +300,15 @@ export function SettingsScreen() {
   const onUpdatePress = useCallback(() => {
     if (downloading) return;
     if (update?.available) return installUpdate();
-    return onCheckUpdate();
+    // A check that finds nothing says so — a button that just stops spinning
+    // reads as if nothing happened. (A found JS update applies itself; a failed
+    // check shows its own error.)
+    return onCheckUpdate().then((result) => {
+      if (result && !result.available) {
+        Alert.alert('No updates available', `You are on the latest version (v${APP_VERSION}).`);
+      }
+      return result;
+    });
   }, [downloading, update?.available, installUpdate, onCheckUpdate]);
 
   const appVersions = useMemo(() => {
