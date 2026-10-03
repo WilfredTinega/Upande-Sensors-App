@@ -2,8 +2,8 @@
   "expo": {
     "name": "Upande Sensors",
     "slug": "upande-sensors",
-    "version": "1.1.7",
-    "runtimeVersion": "1.1",
+    "version": "1.0.0",
+    "runtimeVersion": "101.0",
     "updates": {
       "enabled": true,
       "url": "https://sensor.upande.com/api/method/upande_sensors.api.ota.manifest",
@@ -22,7 +22,7 @@
     },
     "android": {
       "package": "com.upande.sensors",
-      "versionCode": 5107,
+      "versionCode": 105000,
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
