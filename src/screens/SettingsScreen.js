@@ -19,6 +19,7 @@ import {
   StatusChip,
 } from '../components/ui';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { InfoDialog } from '../components/InfoDialog';
 import { Skeleton } from '../components/Skeleton';
 import { PoweredBy } from '../components/PoweredBy';
 import { goToRouteHistory } from '../navigation/ref';
@@ -84,6 +85,8 @@ export function SettingsScreen() {
   const [switching, setSwitching] = useState(false);
   const [togglingBio, setTogglingBio] = useState(false);
   const [editingServer, setEditingServer] = useState(false);
+  // "You're up to date" after a Check for updates that found nothing.
+  const [upToDateOpen, setUpToDateOpen] = useState(false);
   // Shared with the tab badge — the launch check has usually already run by the
   // time this screen opens, so the card renders populated rather than empty.
   const {
@@ -304,9 +307,7 @@ export function SettingsScreen() {
     // reads as if nothing happened. (A found JS update applies itself; a failed
     // check shows its own error.)
     return onCheckUpdate().then((result) => {
-      if (result && !result.available) {
-        Alert.alert('No updates available', `You are on the latest version (v${APP_VERSION}).`);
-      }
+      if (result && !result.available) setUpToDateOpen(true);
       return result;
     });
   }, [downloading, update?.available, installUpdate, onCheckUpdate]);
@@ -647,6 +648,15 @@ export function SettingsScreen() {
 
       {/* Confirmed, not immediate: a tap here ends the session, and the reverse
           costs a password. */}
+      <InfoDialog
+        visible={upToDateOpen}
+        tone="good"
+        title="You're up to date"
+        message="No updates available. You have the latest version of Upande Sensors."
+        pill={`Version ${APP_VERSION}`}
+        buttonLabel="OK"
+        onClose={() => setUpToDateOpen(false)}
+      />
       <ConfirmDialog
         visible={signOutOpen}
         title="Are you sure you want to log out?"

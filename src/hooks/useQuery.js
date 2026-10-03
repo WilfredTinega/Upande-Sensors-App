@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
-import { TTL_SERIES, cached, onRefreshAll, peek } from '../api/cache';
+import { TTL_SERIES, cached, peek } from '../api/cache';
 import { subscribeToNetwork } from '../api/network';
 
 /**
@@ -125,12 +125,6 @@ export function useQuery(key, loader, { ttl = TTL_SERIES, enabled = true, pollMs
       run('load');
     });
   }, [run]);
-
-  /** The avatar tab's "refresh everything": every mounted query re-fetches. */
-  useEffect(() => {
-    if (!active) return undefined;
-    return onRefreshAll(() => run('refresh'));
-  }, [active, run]);
 
   const refresh = useCallback(() => run('refresh'), [run]);
 

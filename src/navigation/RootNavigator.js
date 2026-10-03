@@ -22,7 +22,6 @@ import { PushRegistrar } from '../components/PushRegistrar';
 import { ReportButton } from '../components/ReportButton';
 import { ReadingsTabIcon } from '../components/TabIcons';
 import { UserAvatar } from '../components/UserAvatar';
-import { refreshAll } from '../api/cache';
 import {
   DashboardHeaderTitle,
   HeaderAccountControls,
@@ -104,13 +103,6 @@ function SignedInApp() {
   const t = useTheme();
   const { user } = useAuth();
   const { available: updateAvailable } = useUpdate();
-  // Tapping the account avatar ("A") refreshes every screen's data.
-  const [refreshingAll, setRefreshingAll] = React.useState(false);
-  const onAvatarPress = React.useCallback(() => {
-    if (refreshingAll) return;
-    setRefreshingAll(true);
-    refreshAll().finally(() => setRefreshingAll(false));
-  }, [refreshingAll]);
   const { width } = useWindowDimensions();
 
   /**
@@ -294,21 +286,6 @@ function SignedInApp() {
                     return (
                       <View>
                         <UserAvatar size={size ?? 24} focused={focused} color={color} />
-                        {refreshingAll ? (
-                          <View
-                            style={{
-                              position: 'absolute',
-                              top: 0,
-                              left: 0,
-                              right: 0,
-                              bottom: 0,
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}
-                          >
-                            <ActivityIndicator size="small" color={t.accent} />
-                          </View>
-                        ) : null}
                         {/* A new APK is the one thing the app must volunteer:
                             nothing else will tell a field phone it is out of
                             date. A dot, not a count — there is only ever one
@@ -517,13 +494,10 @@ function SignedInApp() {
               <Tab.Screen
                 name="Account"
                 component={SettingsScreen}
-                // The avatar doubles as a refresh button: every press reloads the
-                // app's data (and still opens Account).
-                listeners={{ tabPress: onAvatarPress }}
                 options={{
                   headerTitle: 'Account',
                   tabBarLabel: 'Account',
-                  tabBarAccessibilityLabel: 'Account tab — tap to refresh data',
+                  tabBarAccessibilityLabel: 'Account tab',
                 }}
               />
             </Tab.Navigator>
