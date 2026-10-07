@@ -98,6 +98,7 @@ export function SettingsScreen() {
     // while this screen is closed and both paths report one state.
     downloading,
     progress,
+    downloaded,
     installError,
     install,
   } = useUpdate();
@@ -288,9 +289,10 @@ export function SettingsScreen() {
       return `Updating ${Math.round(progress.fraction * 100)}% · ${written} of ${total}`;
     }
     if (checkingUpdate) return 'Checking…';
+    if (update?.available && downloaded === update.version) return `Install ${update.version}`;
     if (update?.available) return `Update to ${update.version}`;
     return 'Check for updates';
-  }, [downloading, progress, checkingUpdate, update?.available, update?.version]);
+  }, [downloading, progress, checkingUpdate, update?.available, update?.version, downloaded]);
 
   /**
    * One button, three jobs, in the order they happen: check, then update, then
@@ -606,9 +608,10 @@ export function SettingsScreen() {
         {/*
             One control, carrying everything.
 
-            It reads "Update" throughout — never "Install" or "Download", which
-            describe the mechanism rather than what the user is doing — and the
-            progress is on the button itself. The separate bar and byte line
+            It reads "Update" while there is something to fetch and "Install"
+            once the APK is downloaded — a finished download waits on this
+            press rather than starting again — and the progress is on the
+            button itself. The separate bar and byte line
             underneath are gone: three things reporting one download is two more
             than the screen needs, and the count belongs where the eye already
             is.
