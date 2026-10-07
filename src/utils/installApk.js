@@ -26,7 +26,8 @@ const INSTALL_ACTION = 'android.intent.action.INSTALL_PACKAGE';
 const UNKNOWN_SOURCES_SETTINGS = 'android.settings.MANAGE_UNKNOWN_APP_SOURCES';
 const APK_MIME = 'application/vnd.android.package-archive';
 
-/** A dropped connection is normal for a file this size; one failure is not final. */
+/** A dropped connection is normal for a file this size: it is resumed, and only
+ *  this many failures in a row without progress are final. */
 const DOWNLOAD_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 1500;
 
@@ -61,76 +62,81 @@ export async function openUnknownAppSourcesSettings() {
   );
 }
 
+/** Where a release's APK lands: the files directory, not the cache — Android
+ *  evicts the cache under storage pressure, mid-download. */
+function apkPath(url, fileName) {
+  const dir = FileSystem.documentDirectory || FileSystem.cacheDirectory;
+  if (!dir) return null;
+  return `${dir}${fileName || url.split('/').pop() || 'update.apk'}`;
+}
+
+async function sizeOf(uri) {
+  try {
+    const info = await FileSystem.getInfoAsync(uri);
+    return info.exists && !info.isDirectory ? info.size ?? 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /**
- * Download `url` and return the file, without installing it.
+ * The local URI of a release that is already fully downloaded, or null. Only
+ * trusted when the release's exact size is known — a partial file looks like
+ * a whole one otherwise.
+ */
+export async function findDownloadedApk(url, { fileName, expectedBytes } = {}) {
+  if (Platform.OS !== 'android' || !url || !expectedBytes) return null;
+  const target = apkPath(url, fileName);
+  if (!target) return null;
+  return (await sizeOf(target)) === expectedBytes ? target : null;
+}
+
+/**
+ * Download `url` and return the file, without installing it — Android 10+
+ * refuses to start an activity from the background, so a download that lands
+ * while the app is hidden is held and launched on the next foreground.
+ * `onProgress` receives `{ fraction, written, total }` (fraction and total are
+ * null without a Content-Length). The APK is kept
+ * once complete, so the installer can be opened (and reopened after being
+ * dismissed) without fetching it again.
  *
- * Split from the launch below because Android 10 and later refuse to start an
- * activity from the background. A download that finishes while the app is not
- * foregrounded must therefore be *held*, and the installer opened when the app
- * is next active — otherwise the update silently never installs, which is the
- * one failure this whole path exists to avoid.
- *
- * `onProgress` receives `{ fraction, written, total }`. `fraction` and `total`
- * are null when the server sends no Content-Length, so the UI can show an
- * indeterminate state rather than a bar stuck at zero — `written` is always
- * real, which is why it is reported separately rather than folded into a
- * percentage.
+ * A dropped connection resumes from the bytes already on disk (an HTTP Range
+ * request) instead of starting over, and so does a download cut off by the
+ * app being closed. Resuming needs the release's exact size, which is also
+ * what proves the result complete.
  */
 export async function downloadApk(url, { fileName, onProgress, expectedBytes } = {}) {
-  if (Platform.OS !== 'android') {
-    throw new InstallError('APK installation is only possible on Android.');
-  }
+  if (Platform.OS !== 'android') throw new InstallError('APK installation is only possible on Android.');
   if (!url) throw new InstallError('No download link for this release.');
 
-  const name = fileName || url.split('/').pop() || 'update.apk';
-  /**
-   * Downloaded into the app's files directory, not its cache.
-   *
-   * Android evicts cache directories under storage pressure, and it does not
-   * wait for a 74MB write to finish first — which is one way a long download
-   * dies with a bare `java.io.IOException` and nothing else to go on. The files
-   * directory is not evictable. Expo's FileProvider exposes both
-   * (`files-path` and `cache-path` in file_system_provider_paths.xml), so
-   * `getContentUriAsync` works from either.
-   */
-  const dir = FileSystem.documentDirectory || FileSystem.cacheDirectory;
-  const target = `${dir}${name}`;
+  const target = apkPath(url, fileName);
+  if (!target) throw new InstallError('No storage is available for the download.');
+  const dir = target.slice(0, target.lastIndexOf('/') + 1);
+  const expected = expectedBytes || null;
 
-  /**
-   * Clear out every APK here first, not just this one's name.
-   *
-   * A partial file from an interrupted attempt would otherwise be handed to the
-   * installer as-is and rejected as corrupt. And because these now live in the
-   * files directory rather than the cache, Android will never reclaim them — one
-   * 74MB APK per release would sit there for good. Sweeping on the way in is
-   * the only safe moment: the installer reads the file asynchronously after the
-   * intent is handed over, so deleting straight after launching it would pull
-   * the update out from under the installer.
-   */
+  const done = await findDownloadedApk(url, { fileName, expectedBytes });
+  if (done) {
+    onProgress?.({ fraction: 1, written: expected ?? 0, total: expected });
+    return { uri: done, size: expected ?? 0 };
+  }
+
+  // Sweep every other APK (the files directory is never reclaimed); this
+  // release's partial file stays, to be resumed. Never after launching: the
+  // installer reads the file asynchronously.
   try {
     for (const entry of await FileSystem.readDirectoryAsync(dir)) {
-      if (entry.toLowerCase().endsWith('.apk')) {
+      if (entry.toLowerCase().endsWith('.apk') && `${dir}${entry}` !== target) {
         await FileSystem.deleteAsync(`${dir}${entry}`, { idempotent: true }).catch(() => {});
       }
     }
   } catch {
-    // Unreadable directory is not a reason to refuse the download; the
-    // same-named target is removed below regardless.
+    // An unreadable directory is no reason to refuse the download.
   }
-  await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => {});
+  if (!expected) await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => {});
 
-  /**
-   * Checked before starting, because the release APK is ~74MB and a phone that
-   * cannot hold it fails partway through with a generic write error. Saying so
-   * up front is the difference between "the download failed" and something the
-   * user can act on.
-   *
-   * `expectedBytes` is the caller's hint; without one, a conservative floor is
-   * used rather than skipping the check.
-   */
   try {
     const free = await FileSystem.getFreeDiskStorageAsync();
-    const needed = (expectedBytes || 80 * 1024 * 1024) * 1.1;
+    const needed = ((expected ?? 80 * 1024 * 1024) - (await sizeOf(target))) * 1.1;
     if (free != null && free < needed) {
       throw new InstallError(
         `Not enough free space for the update — about ${Math.ceil(needed / 1048576)}MB is ` +
@@ -139,84 +145,57 @@ export async function downloadApk(url, { fileName, onProgress, expectedBytes } =
       );
     }
   } catch (err) {
-    // Only our own refusal propagates; an unavailable API must not block a
-    // download that would have worked.
     if (err instanceof InstallError) throw err;
   }
 
   const report = (progress) => {
     if (!onProgress) return;
     const written = progress.totalBytesWritten;
-    // Android reports -1 for a response with no Content-Length; treating that
-    // as a total would render "0.0 MB" and a bar that never moves.
-    const total =
-      progress.totalBytesExpectedToWrite > 0 ? progress.totalBytesExpectedToWrite : null;
-    onProgress({ fraction: total ? written / total : null, written, total });
+    const total = expected ?? (progress.totalBytesExpectedToWrite > 0 ? progress.totalBytesExpectedToWrite : null);
+    onProgress({ fraction: total ? Math.min(written / total, 1) : null, written, total });
   };
 
-  /**
-   * Retried, because a 74MB transfer to a phone drops.
-   *
-   * A truncated stream surfaces as a bare `java.io.IOException` with no detail,
-   * and one dropped connection should not mean no update.
-   *
-   * Each attempt starts clean: a fresh resumable over a deleted file.
-   * `resumeAsync` is deliberately not used — it only resumes from state captured
-   * by `pauseAsync`, so after a thrown error there is no resume data and it
-   * would restart anyway, with the added risk of appending to bytes already on
-   * disk. Honest restart beats a corrupt APK the installer rejects.
-   */
-  let result;
+  // Attempts that moved the download forward don't count against the limit:
+  // only DOWNLOAD_ATTEMPTS failures in a row without a new byte give up.
   let lastError;
-  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt += 1) {
-    try {
-      if (attempt > 1) {
-        await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => {});
-        // A moment before retrying; an immediate retry usually meets the same
-        // dead connection.
-        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * (attempt - 1)));
-      }
-      const download = FileSystem.createDownloadResumable(url, target, {}, report);
-      result = await download.downloadAsync();
-      if (result?.uri) break;
-    } catch (err) {
-      lastError = err;
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.warn(`[update] download attempt ${attempt}/${DOWNLOAD_ATTEMPTS} failed:`, err);
-      }
+  let stalled = 0;
+  while (stalled < DOWNLOAD_ATTEMPTS) {
+    let have = expected ? await sizeOf(target) : 0;
+    if (expected && have > expected) {
+      // The server ignored the Range and appended a whole copy: start clean.
+      await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => {});
+      have = 0;
     }
+    if (expected && have === expected) return { uri: target, size: have };
+    if (stalled > 0) await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * stalled));
+
+    try {
+      const download = FileSystem.createDownloadResumable(url, target, {}, report, have > 0 ? String(have) : undefined);
+      const result = await download.downloadAsync();
+      if (result?.status && (result.status < 200 || result.status >= 300)) {
+        // An error page may have been appended to the partial file.
+        await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => {});
+        throw new InstallError(`The server returned ${result.status} for the update file.`);
+      }
+      if (result?.uri && !expected) {
+        // An HTML error page saved under a .apk name is still a "successful" download.
+        const size = await sizeOf(result.uri);
+        if (!size) throw new InstallError('The downloaded file is empty.');
+        return { uri: result.uri, size };
+      }
+    } catch (err) {
+      if (err instanceof InstallError) throw err;
+      lastError = err;
+      if (typeof __DEV__ !== 'undefined' && __DEV__) console.warn('[update] download interrupted:', err);
+    }
+    if (!expected || (await sizeOf(target)) <= have) stalled += 1;
+    else stalled = 0;
   }
 
-  if (!result?.uri) {
-    const err = lastError;
-    /**
-     * The reason is carried into the message, not just the `cause`.
-     *
-     * "The download failed. Check your connection and try again." was reported
-     * for a source that was demonstrably healthy, and the actual reason — a
-     * reload killing a 74MB transfer, no space, a dead socket — was only ever in
-     * a `cause` nobody printed. A wrong diagnosis costs more than a long
-     * sentence.
-     */
-    const reason = err?.message ? ` (${err.message})` : '';
-    throw new InstallError(
-      `The download failed after ${DOWNLOAD_ATTEMPTS} attempts${reason}. ` +
-        'Check your connection and try again.',
-      { kind: INSTALL_ERRORS.DOWNLOAD, cause: err },
-    );
-  }
-  if (result.status && (result.status < 200 || result.status >= 300)) {
-    throw new InstallError(`The server returned ${result.status} for the update file.`);
-  }
-
-  // An HTML error page saved under a .apk name is still a "successful"
-  // download; size is the cheap tell before the installer rejects it.
-  const info = await FileSystem.getInfoAsync(result.uri);
-  if (!info.exists || !info.size) {
-    throw new InstallError('The downloaded file is empty.');
-  }
-
-  return { uri: result.uri, size: info.size };
+  throw new InstallError('The download keeps failing. Check your connection and try again.', {
+    kind: INSTALL_ERRORS.DOWNLOAD,
+    cause: lastError,
+  });
 }
 
 /**
