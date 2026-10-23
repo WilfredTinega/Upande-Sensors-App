@@ -1,13 +1,13 @@
 {
-  "id": "9f632d56-1271-4bd2-9021-79be336eb335",
-  "createdAt": "2026-10-03T04:28:26.848Z",
+  "id": "ed656400-63cb-4f64-88e6-1d92feaca408",
+  "createdAt": "2026-10-23T07:36:20.300Z",
   "runtimeVersion": "101.0",
   "launchAsset": {
-    "hash": "IPO1p0GTSPVpEBHa3ZTJPMuvaQgutr29gWpUE-McykU",
-    "key": "index-51963d012a384d4facab8c8bfbcf7e95",
+    "hash": "7FFSpaqxV_WZscdGrrM9gANJXuaTlG4GptTUyQpd_mE",
+    "key": "index-35bb3c133e4d43a8cad11c9be52224bf",
     "contentType": "application/javascript",
     "fileExtension": ".hbc",
-    "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/101.0/_expo/static/js/android/index-51963d012a384d4facab8c8bfbcf7e95.hbc"
+    "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/101.0/_expo/static/js/android/index-35bb3c133e4d43a8cad11c9be52224bf.hbc"
   },
   "assets": [
     {
@@ -289,7 +289,7 @@
     "expoClient": {
       "name": "Upande Sensors",
       "slug": "upande-sensors",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "runtimeVersion": "101.0",
       "updates": {
         "enabled": true,
@@ -309,7 +309,7 @@
       },
       "android": {
         "package": "com.upande.sensors",
-        "versionCode": 105002,
+        "versionCode": 105003,
         "adaptiveIcon": {
           "backgroundColor": "#FFFFFF",
           "foregroundImage": "./assets/android-icon-foreground.png",
@@ -376,7 +376,7 @@
         "android"
       ]
     },
-    "appVersion": "1.0.2",
-    "publishedAt": "2026-10-03T04:28:26.865Z"
+    "appVersion": "1.0.3",
+    "publishedAt": "2026-10-23T07:36:20.311Z"
   }
 }
