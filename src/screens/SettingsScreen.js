@@ -180,6 +180,9 @@ export function SettingsScreen() {
     () => (Array.isArray(roles.data) ? roles.data : []).includes(PRIVILEGED_ROLE),
     [roles.data],
   );
+  // Impersonation is Administrator-only, same gate ERPNext uses on the User
+  // form impersonate button. System Manager isn't enough.
+  const isAdministrator = useMemo(() => user?.name === 'Administrator', [user?.name]);
 
   /**
    * Push registration state, from the module that owns it.
@@ -595,7 +598,7 @@ export function SettingsScreen() {
             />
           )
         ) : null}
-        {isSystemManager && !impersonatedBy ? (
+        {isAdministrator && !impersonatedBy ? (
           <Button
             label="View as user…"
             tone="ghost"
