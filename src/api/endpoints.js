@@ -97,6 +97,9 @@ const APP_ONLY = {
   registerInstall: 'upande_sensors.api.mobile.register_install',
   installs: 'upande_sensors.api.mobile.installs',
   locationCoverage: 'upande_sensors.api.mobile.location_coverage',
+  listUsersForImpersonation: 'upande_sensors.api.mobile.list_users_for_impersonation',
+  startImpersonation: 'upande_sensors.api.mobile.start_impersonation',
+  stopImpersonation: 'upande_sensors.api.mobile.stop_impersonation',
 };
 
 const LEGACY = {
@@ -1218,4 +1221,16 @@ export async function getUserFullNames(users = [], signal) {
     // Whatever was already known still stands.
   }
   return out;
+}
+
+export async function listUsersForImpersonation(txt = '', signal) {
+  return client.call(APP_ONLY.listUsersForImpersonation, { txt }, { signal });
+}
+
+export async function startImpersonation(user, signal) {
+  return client.call(APP_ONLY.startImpersonation, { user }, { signal, method: 'POST' });
+}
+
+export async function stopImpersonation(signal) {
+  return client.call(APP_ONLY.stopImpersonation, {}, { signal, method: 'POST' });
 }

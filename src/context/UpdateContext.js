@@ -12,7 +12,7 @@ import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 
 import { autoCheckForUpdate, checkForUpdate, UPDATE_ERRORS, UPDATE_KINDS } from '../api/updates';
-import { downloadApk, launchInstaller } from '../utils/installApk';
+import { downloadApk, findDownloadedApk, launchInstaller } from '../utils/installApk';
 
 /**
  * Whether a newer build exists, held app-wide — and fetching it when there is.
@@ -90,6 +90,8 @@ export function UpdateProvider({ children }) {
 
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState(null);
+  /** The version whose APK is fully downloaded and waiting to be installed. */
+  const [downloaded, setDownloaded] = useState(null);
   const [installError, setInstallError] = useState(null);
 
   /**
@@ -115,6 +117,16 @@ export function UpdateProvider({ children }) {
    * app" and "silently never installs".
    */
   const pending = useRef(null);
+
+  /**
+   * The finished download, `{ version, uri }`, read synchronously by `install`.
+   *
+   * Kept so a dismissed installer is reopened from the Account button
+   * ("Install") without fetching tens of MB again. A download started from that
+   * button stops at 100% and waits for the next press; an automatic one opens
+   * the installer as before.
+   */
+  const ready = useRef(null);
 
   /* ── OTA: the JS bundle inside the same runtime ───────────────────────── */
 
@@ -329,8 +341,6 @@ export function UpdateProvider({ children }) {
       }
 
       busy.current = true;
-      setDownloading(true);
-      setProgress(null);
       setInstallError(null);
       try {
         /**
@@ -342,7 +352,14 @@ export function UpdateProvider({ children }) {
          * build — a manual press still falls back to the APK.
          */
         if (release.kind === UPDATE_KINDS.JS) {
-          const js = await applyJsUpdate();
+          setDownloading(true);
+          setProgress(null);
+          let js;
+          try {
+            js = await applyJsUpdate();
+          } finally {
+            setDownloading(false);
+          }
           if (js === 'applied') return true;
           if (js === 'current') {
             // Already running the newest bundle; drop the stale "available".
@@ -364,19 +381,48 @@ export function UpdateProvider({ children }) {
           return false;
         }
 
-        const file = await downloadApk(release.downloadUrl, {
-          fileName: release.assetName,
-          onProgress: setProgress,
-          // The releases API reports the asset size, so the space check can be
-          // exact rather than a guessed floor.
-          expectedBytes: release.sizeBytes,
-        });
+        // Already downloaded and still complete on disk? Then straight to the
+        // installer. Without a known size the earlier download is trusted.
+        let uri = null;
+        if (ready.current?.version === release.version) {
+          uri = release.sizeBytes
+            ? await findDownloadedApk(release.downloadUrl, {
+                fileName: release.assetName,
+                expectedBytes: release.sizeBytes,
+              })
+            : ready.current.uri;
+        }
+
+        if (!uri) {
+          ready.current = null;
+          setDownloaded(null);
+          setDownloading(true);
+          setProgress(null);
+          try {
+            const file = await downloadApk(release.downloadUrl, {
+              fileName: release.assetName,
+              onProgress: setProgress,
+              // The releases API reports the asset size, so the space check can be
+              // exact rather than a guessed floor, and a dropped connection resumes.
+              expectedBytes: release.sizeBytes,
+            });
+            uri = file.uri;
+          } finally {
+            setDownloading(false);
+            setProgress(null);
+          }
+          ready.current = { version: release.version, uri };
+          setDownloaded(release.version);
+          // Pressed by hand: the button now reads "Install" and waits for that press.
+          if (!auto) return true;
+        }
+
         if (AppState.currentState !== 'active') {
           // Held rather than dropped — see `pending`.
-          pending.current = file.uri;
+          pending.current = uri;
           return false;
         }
-        await launchInstaller(file.uri);
+        await launchInstaller(uri);
         return true;
       } catch (err) {
         setInstallError({
@@ -387,12 +433,31 @@ export function UpdateProvider({ children }) {
         return false;
       } finally {
         busy.current = false;
-        setDownloading(false);
-        setProgress(null);
       }
     },
     [update, applyJsUpdate],
   );
+
+  /**
+   * An APK downloaded earlier — this run or a previous one — is offered for
+   * install straight away instead of being fetched again.
+   */
+  useEffect(() => {
+    if (!update?.available || update.kind === UPDATE_KINDS.JS) return undefined;
+    if (ready.current?.version === update.version) return undefined;
+    let cancelled = false;
+    findDownloadedApk(update.downloadUrl, {
+      fileName: update.assetName,
+      expectedBytes: update.sizeBytes,
+    }).then((uri) => {
+      if (cancelled || !uri) return;
+      ready.current = { version: update.version, uri };
+      setDownloaded(update.version);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [update]);
 
   /**
    * Fetch and install as soon as a newer build is known about, without waiting
@@ -449,12 +514,13 @@ export function UpdateProvider({ children }) {
       available: Boolean(update?.available),
       downloading,
       progress,
+      downloaded,
       installError,
       install,
       otaChecking,
       otaReady,
     }),
-    [update, checking, error, check, downloading, progress, installError, install, otaChecking, otaReady],
+    [update, checking, error, check, downloading, progress, downloaded, installError, install, otaChecking, otaReady],
   );
 
   return <UpdateContext.Provider value={value}>{children}</UpdateContext.Provider>;
@@ -474,6 +540,7 @@ export function useUpdate() {
       available: false,
       downloading: false,
       progress: null,
+      downloaded: null,
       installError: null,
       install: async () => false,
       otaChecking: false,
