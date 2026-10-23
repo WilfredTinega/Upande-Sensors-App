@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Linking, Pressable, ScrollView, Switch, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, FlatList, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import {
@@ -25,7 +25,7 @@ import { PoweredBy } from '../components/PoweredBy';
 import { goToRouteHistory } from '../navigation/ref';
 import { TTL_REFERENCE, cacheKey } from '../api/cache';
 import { normaliseBaseUrl } from '../api/client';
-import { getServerVersions, getUserRoles } from '../api/endpoints';
+import { getServerVersions, getUserRoles, getSession, listUsersForImpersonation, startImpersonation, stopImpersonation } from '../api/endpoints';
 import { useAuth } from '../context/AuthContext';
 import { useQuery } from '../hooks/useQuery';
 import { UPDATE_ERRORS, compareVersions, formatBytes } from '../api/updates';
@@ -87,6 +87,69 @@ export function SettingsScreen() {
   const [editingServer, setEditingServer] = useState(false);
   // "You're up to date" after a Check for updates that found nothing.
   const [upToDateOpen, setUpToDateOpen] = useState(false);
+
+  // ── impersonation ──
+  const [impersonatedBy, setImpersonatedBy] = useState(null);
+  const [showImpersonate, setShowImpersonate] = useState(false);
+  const [impersonateSearch, setImpersonateSearch] = useState('');
+  const [impersonateUsers, setImpersonateUsers] = useState([]);
+  const [impersonateLoading, setImpersonateLoading] = useState(false);
+  const [impersonateBusy, setImpersonateBusy] = useState(false);
+  const impersonateSearchRef = useRef(null);
+
+  useEffect(() => {
+    getSession().then((info) => {
+      if (info?.impersonated_by) setImpersonatedBy(info.impersonated_by);
+    }).catch(() => {});
+  }, []);
+
+  const searchImpersonateUsers = useCallback(async (txt) => {
+    setImpersonateLoading(true);
+    try {
+      const rows = await listUsersForImpersonation(txt || '');
+      setImpersonateUsers(Array.isArray(rows) ? rows : []);
+    } catch {
+      setImpersonateUsers([]);
+    } finally {
+      setImpersonateLoading(false);
+    }
+  }, []);
+
+  const doImpersonate = useCallback(async (targetUser) => {
+    setImpersonateBusy(true);
+    try {
+      await startImpersonation(targetUser);
+      setShowImpersonate(false);
+      Alert.alert(
+        'Now viewing as user',
+        `You are now viewing the app as ${targetUser}. Sign out to return to your own account.`,
+        [{ text: 'OK' }],
+      );
+      setImpersonatedBy(user?.name || '');
+    } catch (e) {
+      Alert.alert('Error', e?.message || 'Could not switch user');
+    } finally {
+      setImpersonateBusy(false);
+    }
+  }, [user]);
+
+  const doStopImpersonation = useCallback(() => {
+    Alert.alert(
+      'Stop viewing as user',
+      'You will be signed out and need to sign back in as yourself.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign out',
+          style: 'destructive',
+          onPress: async () => {
+            try { await stopImpersonation(); } catch {}
+            signOut({ remote: false });
+          },
+        },
+      ],
+    );
+  }, [signOut]);
   // Shared with the tab badge — the launch check has usually already run by the
   // time this screen opens, so the card renders populated rather than empty.
   const {
@@ -98,6 +161,7 @@ export function SettingsScreen() {
     // while this screen is closed and both paths report one state.
     downloading,
     progress,
+    downloaded,
     installError,
     install,
   } = useUpdate();
@@ -288,9 +352,10 @@ export function SettingsScreen() {
       return `Updating ${Math.round(progress.fraction * 100)}% · ${written} of ${total}`;
     }
     if (checkingUpdate) return 'Checking…';
+    if (update?.available && downloaded === update.version) return `Install ${update.version}`;
     if (update?.available) return `Update to ${update.version}`;
     return 'Check for updates';
-  }, [downloading, progress, checkingUpdate, update?.available, update?.version]);
+  }, [downloading, progress, checkingUpdate, update?.available, update?.version, downloaded]);
 
   /**
    * One button, three jobs, in the order they happen: check, then update, then
@@ -322,6 +387,18 @@ export function SettingsScreen() {
   }, [versions.data]);
 
   return (
+    <>
+    {impersonatedBy ? (
+      <View style={{ backgroundColor: '#f59e0b', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 8, gap: 8 }}>
+        <Ionicons name="eye-outline" size={14} color="#1c1917" />
+        <Text style={{ fontSize: 12, fontWeight: '600', color: '#1c1917' }}>
+          Viewing as {user?.fullName || user?.name}
+        </Text>
+        <Pressable onPress={doStopImpersonation} style={{ marginLeft: 8, backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 4, paddingHorizontal: 10, paddingVertical: 2 }}>
+          <Text style={{ fontSize: 12, fontWeight: '700', color: '#1c1917' }}>Stop</Text>
+        </Pressable>
+      </View>
+    ) : null}
     <ScrollView
       style={{ flex: 1, backgroundColor: t.background }}
       contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xxl }}
@@ -518,6 +595,18 @@ export function SettingsScreen() {
             />
           )
         ) : null}
+        {isSystemManager && !impersonatedBy ? (
+          <Button
+            label="View as user…"
+            tone="ghost"
+            style={{ marginTop: spacing.sm }}
+            onPress={() => {
+              setShowImpersonate(true);
+              setImpersonateSearch('');
+              searchImpersonateUsers('');
+            }}
+          />
+        ) : null}
       </Card>
 
       {/* Updates arrive as APKs on GitHub Releases, so the app has to tell
@@ -606,9 +695,10 @@ export function SettingsScreen() {
         {/*
             One control, carrying everything.
 
-            It reads "Update" throughout — never "Install" or "Download", which
-            describe the mechanism rather than what the user is doing — and the
-            progress is on the button itself. The separate bar and byte line
+            It reads "Update" while there is something to fetch and "Install"
+            once the APK is downloaded — a finished download waits on this
+            press rather than starting again — and the progress is on the
+            button itself. The separate bar and byte line
             underneath are gone: three things reporting one download is two more
             than the screen needs, and the count belongs where the eye already
             is.
@@ -670,5 +760,76 @@ export function SettingsScreen() {
         }}
       />
     </ScrollView>
+
+    {/* Impersonation user picker modal */}
+    <Modal
+      visible={showImpersonate}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setShowImpersonate(false)}
+    >
+      <Pressable
+        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 20 }}
+        onPress={() => setShowImpersonate(false)}
+      >
+        <Pressable
+          style={{ width: '100%', maxWidth: 420, backgroundColor: t.surface, borderRadius: 12, overflow: 'hidden', maxHeight: '80%' }}
+          onPress={(e) => e.stopPropagation()}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.border }}>
+            <Text style={{ fontSize: 16, fontWeight: '600', color: t.text }}>View as user</Text>
+            <Pressable onPress={() => setShowImpersonate(false)} hitSlop={8}>
+              <Ionicons name="close" size={20} color={t.textMuted} />
+            </Pressable>
+          </View>
+          <View style={{ padding: 12 }}>
+            <TextInput
+              ref={impersonateSearchRef}
+              style={{ borderWidth: 1, borderColor: t.border, borderRadius: 8, padding: 10, fontSize: 14, color: t.text, backgroundColor: t.background }}
+              placeholder="Search by name or email…"
+              placeholderTextColor={t.textMuted}
+              value={impersonateSearch}
+              onChangeText={(v) => { setImpersonateSearch(v); searchImpersonateUsers(v); }}
+              autoFocus
+              returnKeyType="search"
+            />
+          </View>
+          {impersonateLoading ? (
+            <View style={{ padding: 24, alignItems: 'center' }}>
+              <ActivityIndicator color={t.accent} />
+            </View>
+          ) : (
+            <FlatList
+              data={impersonateUsers}
+              keyExtractor={(item) => item.value}
+              style={{ maxHeight: 340 }}
+              contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: 12 }}
+              ListEmptyComponent={<Text style={{ textAlign: 'center', color: t.textMuted, fontSize: 13, padding: 20 }}>No users found</Text>}
+              renderItem={({ item }) => (
+                <Pressable
+                  disabled={impersonateBusy}
+                  onPress={() => doImpersonate(item.value)}
+                  style={({ pressed }) => ({
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: 10,
+                    borderRadius: 8,
+                    backgroundColor: pressed ? t.accentSoft : 'transparent',
+                    opacity: impersonateBusy ? 0.5 : 1,
+                  })}
+                >
+                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: t.accentSoft, alignItems: 'center', justifyContent: 'center' }}>
+                    <Ionicons name="person-outline" size={16} color={t.accent} />
+                  </View>
+                  <Text style={{ fontSize: 13, color: t.text, flex: 1 }}>{item.label}</Text>
+                </Pressable>
+              )}
+            />
+          )}
+        </Pressable>
+      </Pressable>
+    </Modal>
+    </>
   );
 }
