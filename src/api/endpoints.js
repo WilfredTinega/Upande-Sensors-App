@@ -217,6 +217,10 @@ export function getSession(signal, { force = false } = {}) {
             roles,
             is_admin: user === 'Administrator',
             is_system_manager: user === 'Administrator' || roles.includes('System Manager'),
+            // Fallback: without the app-side whoami we can't read the User
+            // DocPerm for `impersonate`, so default to Admin-only here. The
+            // primary whoami above returns the real value.
+            can_impersonate: user === 'Administrator',
             time_zone: zone?.time_zone || null,
             server_time: null,
             versions: versions || {},
