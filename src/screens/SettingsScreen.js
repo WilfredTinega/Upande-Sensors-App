@@ -180,9 +180,14 @@ export function SettingsScreen() {
     () => (Array.isArray(roles.data) ? roles.data : []).includes(PRIVILEGED_ROLE),
     [roles.data],
   );
-  // Impersonation is Administrator-only, same gate ERPNext uses on the User
-  // form impersonate button. System Manager isn't enough.
-  const isAdministrator = useMemo(() => user?.name === 'Administrator', [user?.name]);
+  // Matches Frappe's own gate on the User form impersonate button: the
+  // Administrator user, or any user granted the `impersonate` DocPerm on User
+  // (reported by whoami as `can_impersonate`). System Manager isn't enough on
+  // its own, but a System Manager with impersonate perm is.
+  const canImpersonate = useMemo(
+    () => user?.name === 'Administrator' || !!user?.can_impersonate,
+    [user?.name, user?.can_impersonate],
+  );
 
   /**
    * Push registration state, from the module that owns it.
@@ -598,7 +603,7 @@ export function SettingsScreen() {
             />
           )
         ) : null}
-        {isAdministrator && !impersonatedBy ? (
+        {canImpersonate && !impersonatedBy ? (
           <Button
             label="View as user…"
             tone="ghost"
