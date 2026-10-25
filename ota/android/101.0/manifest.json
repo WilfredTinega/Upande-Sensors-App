@@ -1,13 +1,13 @@
 {
-  "id": "1d0f4ae2-e4b2-4c1d-a237-66e057947fd4",
-  "createdAt": "2026-10-25T14:05:31.276Z",
+  "id": "6ccb1d39-b452-4ced-bf2c-4ad35b9b961a",
+  "createdAt": "2026-10-25T14:06:38.665Z",
   "runtimeVersion": "101.0",
   "launchAsset": {
-    "hash": "C9-m-kH6hSsyEipR2iHgXpryxiWOXjo3cw0QdkFRbzQ",
-    "key": "index-8cb2635269987b183eba8ad6e1ef7d76",
+    "hash": "Lt1ankPi8L7ScqX8pBQiyLCJQHgP2O4pFDiyrUuGfM4",
+    "key": "index-38f82a3964e06af918777287abc900a4",
     "contentType": "application/javascript",
     "fileExtension": ".hbc",
-    "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/101.0/_expo/static/js/android/index-8cb2635269987b183eba8ad6e1ef7d76.hbc"
+    "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/101.0/_expo/static/js/android/index-38f82a3964e06af918777287abc900a4.hbc"
   },
   "assets": [
     {
@@ -377,6 +377,6 @@
       ]
     },
     "appVersion": "1.0.6",
-    "publishedAt": "2026-10-25T14:05:31.287Z"
+    "publishedAt": "2026-10-25T14:06:38.688Z"
   }
 }
