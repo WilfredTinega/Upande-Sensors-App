@@ -33,6 +33,8 @@ import { INSTALL_ERRORS, openUnknownAppSourcesSettings } from '../utils/installA
 import { APP_VERSION, useUpdate } from '../context/UpdateContext';
 import { RELEASES_URL } from '../config';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
+import { useDashboard } from '../context/DashboardContext';
+import { invalidate } from '../api/cache';
 import { font } from '../theme';
 
 const PRIVILEGED_ROLE = 'System Manager';
@@ -115,11 +117,16 @@ export function SettingsScreen() {
     }
   }, []);
 
+  const { refreshReference } = useDashboard();
   const doImpersonate = useCallback(async (targetUser) => {
     setImpersonateBusy(true);
     try {
       await startImpersonation(targetUser);
       setShowImpersonate(false);
+      // The session now belongs to the other user; everything cached was
+      // loaded as us, so drop it and reload their sites and dashboards.
+      invalidate();
+      refreshReference().catch(() => {});
       Alert.alert(
         'Now viewing as user',
         `You are now viewing the app as ${targetUser}. Sign out to return to your own account.`,
@@ -131,7 +138,7 @@ export function SettingsScreen() {
     } finally {
       setImpersonateBusy(false);
     }
-  }, [user]);
+  }, [user, refreshReference]);
 
   const doStopImpersonation = useCallback(() => {
     Alert.alert(
@@ -777,15 +784,15 @@ export function SettingsScreen() {
       onRequestClose={() => setShowImpersonate(false)}
     >
       <Pressable
-        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 20 }}
+        style={{ flex: 1, backgroundColor: t.mode === 'dark' ? 'rgba(0,0,0,0.65)' : 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 20 }}
         onPress={() => setShowImpersonate(false)}
       >
         <Pressable
-          style={{ width: '100%', maxWidth: 420, backgroundColor: t.surface, borderRadius: 12, overflow: 'hidden', maxHeight: '80%' }}
+          style={{ width: '100%', maxWidth: 420, backgroundColor: t.surface, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: t.border, overflow: 'hidden', maxHeight: '80%' }}
           onPress={(e) => e.stopPropagation()}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.border }}>
-            <Text style={{ fontSize: 16, fontWeight: '600', color: t.text }}>View as user</Text>
+            <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>View as user</Text>
             <Pressable onPress={() => setShowImpersonate(false)} hitSlop={8}>
               <Ionicons name="close" size={20} color={t.textMuted} />
             </Pressable>
@@ -793,7 +800,9 @@ export function SettingsScreen() {
           <View style={{ padding: 12 }}>
             <TextInput
               ref={impersonateSearchRef}
-              style={{ borderWidth: 1, borderColor: t.border, borderRadius: 8, padding: 10, fontSize: 14, color: t.text, backgroundColor: t.background }}
+              style={[type.body, { borderWidth: 1, borderColor: t.borderStrong, borderRadius: 8, padding: 10, color: t.textPrimary, backgroundColor: t.surfaceSunken }]}
+              keyboardAppearance={t.mode === 'dark' ? 'dark' : 'light'}
+              selectionColor={t.accent}
               placeholder="Search by name or email…"
               placeholderTextColor={t.textMuted}
               value={impersonateSearch}
@@ -812,7 +821,8 @@ export function SettingsScreen() {
               keyExtractor={(item) => item.value}
               style={{ maxHeight: 340 }}
               contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: 12 }}
-              ListEmptyComponent={<Text style={{ textAlign: 'center', color: t.textMuted, fontSize: 13, padding: 20 }}>No users found</Text>}
+              ListEmptyComponent={<Text style={[type.caption, { textAlign: 'center', color: t.textMuted, padding: 20 }]}>No users found</Text>}
+              ItemSeparatorComponent={() => <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: t.border, marginLeft: 50 }} />}
               renderItem={({ item }) => (
                 <Pressable
                   disabled={impersonateBusy}
@@ -830,7 +840,14 @@ export function SettingsScreen() {
                   <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: t.accentSoft, alignItems: 'center', justifyContent: 'center' }}>
                     <Ionicons name="person-outline" size={16} color={t.accent} />
                   </View>
-                  <Text style={{ fontSize: 13, color: t.text, flex: 1 }}>{item.label}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text numberOfLines={1} style={[type.body, { color: t.textPrimary }]}>
+                      {String(item.label || item.value).split(' · ')[0]}
+                    </Text>
+                    <Text numberOfLines={1} style={[type.caption, { color: t.textSecondary, marginTop: 1 }]}>
+                      {item.value}
+                    </Text>
+                  </View>
                 </Pressable>
               )}
             />

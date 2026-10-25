@@ -1249,9 +1249,9 @@ export async function listUsersForImpersonation(txt = '', signal) {
 }
 
 export async function startImpersonation(user, signal) {
-  return client.call(APP_ONLY.startImpersonation, { user }, { signal, method: 'POST' });
+  return client.call(APP_ONLY.startImpersonation, { user }, { signal, write: true });
 }
 
 export async function stopImpersonation(signal) {
-  return client.call(APP_ONLY.stopImpersonation, {}, { signal, method: 'POST' });
+  return client.call(APP_ONLY.stopImpersonation, {}, { signal, write: true });
 }
