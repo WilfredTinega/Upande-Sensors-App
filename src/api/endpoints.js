@@ -856,7 +856,7 @@ export async function searchUsers(txt = '', signal) {
  * roll over. A site without the endpoint rejects with `isMissingEndpoint`,
  * which `push.js` reads as "this server has no alerts".
  */
-export function registerPushToken({ token, platform, device, appVersion, provider }, signal) {
+export function registerPushToken({ token, platform, device, appVersion, provider, alertSound }, signal) {
   return client.call(
     APP_ONLY.registerPushToken,
     {
@@ -865,6 +865,7 @@ export function registerPushToken({ token, platform, device, appVersion, provide
       device: device || undefined,
       app_version: appVersion || undefined,
       provider: provider || undefined,
+      alert_sound: alertSound === undefined ? undefined : alertSound ? 1 : 0,
     },
     { write: true, signal },
   );

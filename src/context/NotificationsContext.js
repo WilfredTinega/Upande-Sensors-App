@@ -13,6 +13,7 @@ import * as SecureStore from 'expo-secure-store';
 
 import { getAlertsCount } from '../api/endpoints';
 import { watchNotificationsReceived } from '../api/push';
+import { loadAlertSound, playAlertSound } from '../utils/alertSound';
 import { useAuth } from './AuthContext';
 
 /**
@@ -72,6 +73,11 @@ export function NotificationsProvider({ children }) {
   const [cursor, setCursor] = useState(null);
   const [ready, setReady] = useState(false);
   const [unread, setUnread] = useState(0);
+  // The count the alert tone compares against; null until the first answer.
+  const lastCountRef = useRef(null);
+  useEffect(() => {
+    loadAlertSound();
+  }, []);
   const [supported, setSupported] = useState(true);
 
   useEffect(() => {
@@ -149,7 +155,13 @@ export function NotificationsProvider({ children }) {
       const answer = await getAlertsCount({ since: cursorRef.current });
       if (mine !== generation.current) return;
       const count = Number(answer?.count);
-      setUnread(Number.isFinite(count) && count > 0 ? count : 0);
+      const next = Number.isFinite(count) && count > 0 ? count : 0;
+      // New alerts since the last count: sound the alert tone. Not on the first
+      // count after launch (or after the list was opened), which only reports
+      // what was already waiting.
+      if (lastCountRef.current !== null && next > lastCountRef.current) playAlertSound();
+      lastCountRef.current = next;
+      setUnread(next);
     } catch (err) {
       if (mine !== generation.current) return;
       if (err?.isMissingEndpoint) {
@@ -233,6 +245,8 @@ export function NotificationsProvider({ children }) {
     generation.current += 1;
     const mine = generation.current;
     setUnread(0);
+    // Everything up to now is read, so the next alert (0 -> 1) is a new one.
+    lastCountRef.current = 0;
     if (!canCount.current) pendingMark.current = true;
     if (canCount.current) {
       getAlertsCount({ since: previous })

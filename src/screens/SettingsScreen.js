@@ -35,6 +35,13 @@ import { RELEASES_URL } from '../config';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
 import { useDashboard } from '../context/DashboardContext';
 import { invalidate } from '../api/cache';
+import {
+  isAlertSoundEnabled,
+  loadAlertSound,
+  playAlertSound,
+  setAlertSoundEnabled,
+  subscribeToAlertSound,
+} from '../utils/alertSound';
 import { font } from '../theme';
 
 const PRIVILEGED_ROLE = 'System Manager';
@@ -204,6 +211,23 @@ export function SettingsScreen() {
    * "Turn on" button, whose result arrives asynchronously.
    */
   const [push, setPush] = useState(getPushState());
+  const [alertSound, setAlertSound] = useState(isAlertSoundEnabled());
+  useEffect(() => {
+    loadAlertSound().then(setAlertSound);
+    return subscribeToAlertSound(setAlertSound);
+  }, []);
+  // The background (closed-app) sound is the server's choice of channel per
+  // device, so a change is re-registered with the token when push is on.
+  const onToggleAlertSound = useCallback(
+    (next) => {
+      setAlertSoundEnabled(next);
+      if (next) playAlertSound();
+      if (push.status === PUSH_STATUS.ON) {
+        registerForPushNotifications({ appVersion: APP_VERSION }).catch(() => {});
+      }
+    },
+    [push.status],
+  );
   const [pushBusy, setPushBusy] = useState(false);
   useEffect(() => subscribeToPushState(setPush), []);
 
@@ -543,6 +567,21 @@ export function SettingsScreen() {
             </Text>
           </View>
           {pushLine.tone ? <StatusChip tone={pushLine.tone} label={pushLine.tone === 'good' ? 'On' : 'Off'} /> : null}
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.border }}>
+          <Ionicons name={alertSound ? 'volume-high-outline' : 'volume-mute-outline'} size={22} color={alertSound ? t.accent : t.textMuted} />
+          <View style={{ flex: 1 }}>
+            <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>Alert sound</Text>
+            <Text style={[type.caption, { color: t.textSecondary, marginTop: 2, lineHeight: 16 }]}>
+              {alertSound ? 'Plays the alert tone when a breach comes in.' : 'Alerts arrive silently.'}
+            </Text>
+          </View>
+          <Switch
+            value={alertSound}
+            onValueChange={onToggleAlertSound}
+            trackColor={{ false: t.surfaceSunken, true: t.accent }}
+            thumbColor={t.surface}
+          />
         </View>
         {/* Offered on `unconfigured` too: a phone whose Firebase init raced the
             registration at sign-in gets a second look without a restart. It

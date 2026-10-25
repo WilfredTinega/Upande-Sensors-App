@@ -64,7 +64,8 @@
         {
           "color": "#2a78d6",
           "sounds": [
-            "./assets/sounds/success.mp3"
+            "./assets/sounds/success.mp3",
+            "./assets/sounds/alert.mp3"
           ]
         }
       ],
@@ -75,7 +76,8 @@
           "isAndroidBackgroundLocationEnabled": false,
           "isAndroidForegroundServiceEnabled": false
         }
-      ]
+      ],
+      "expo-audio"
     ],
     "backgroundColor": "#f2f1ed",
     "androidStatusBar": {
