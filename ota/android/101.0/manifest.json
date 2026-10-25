@@ -1,13 +1,13 @@
 {
-  "id": "ee83ea74-982f-4918-b835-e062b9ede9f7",
-  "createdAt": "2026-10-25T15:36:03.739Z",
+  "id": "97b92b61-4266-4b8b-a7a7-bf1a88e17b35",
+  "createdAt": "2026-10-25T17:39:15.218Z",
   "runtimeVersion": "101.0",
   "launchAsset": {
-    "hash": "_YAV6kSmsKWxP0bVzNFceI3UvLyFP3w9h5B69jgUqi8",
-    "key": "index-9d87a99e7e8018e59e8898939b3c161e",
+    "hash": "ie65wHvS-rfLvqLkYogoXtFmM9eVOCYPW-VwYbmphbM",
+    "key": "index-688d14f752f1d4a4b563d8ce46897b64",
     "contentType": "application/javascript",
     "fileExtension": ".hbc",
-    "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/101.0/_expo/static/js/android/index-9d87a99e7e8018e59e8898939b3c161e.hbc"
+    "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/101.0/_expo/static/js/android/index-688d14f752f1d4a4b563d8ce46897b64.hbc"
   },
   "assets": [
     {
@@ -135,6 +135,13 @@
       "contentType": "application/octet-stream",
       "fileExtension": ".ttf",
       "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/101.0/assets/e9c5c588e39d0765d30bcd6594734102"
+    },
+    {
+      "hash": "TbjEU6WT8Puc_Ui_GQFpfwqpkVl1uzZ8bfaxEZ6KFwE",
+      "key": "fdb28133158efaf18814b5dadfc8f504",
+      "contentType": "application/octet-stream",
+      "fileExtension": ".mp3",
+      "url": "https://wilfredtinega.github.io/Upande-Sensors-App/ota/android/101.0/assets/fdb28133158efaf18814b5dadfc8f504"
     },
     {
       "hash": "-iq30lV4GbK_5QCeRoRO-nFwzxd753NdQ6oqwSlfHVQ",
@@ -289,7 +296,7 @@
     "expoClient": {
       "name": "Upande Sensors",
       "slug": "upande-sensors",
-      "version": "1.0.7",
+      "version": "1.0.8",
       "runtimeVersion": "101.0",
       "updates": {
         "enabled": true,
@@ -309,7 +316,7 @@
       },
       "android": {
         "package": "com.upande.sensors",
-        "versionCode": 105007,
+        "versionCode": 105008,
         "adaptiveIcon": {
           "backgroundColor": "#FFFFFF",
           "foregroundImage": "./assets/android-icon-foreground.png",
@@ -322,7 +329,11 @@
           "android.permission.USE_FINGERPRINT",
           "android.permission.REQUEST_INSTALL_PACKAGES",
           "android.permission.ACCESS_COARSE_LOCATION",
-          "android.permission.ACCESS_FINE_LOCATION"
+          "android.permission.ACCESS_FINE_LOCATION",
+          "android.permission.RECORD_AUDIO",
+          "android.permission.MODIFY_AUDIO_SETTINGS",
+          "android.permission.FOREGROUND_SERVICE",
+          "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
         ],
         "backgroundColor": "#f2f1ed"
       },
@@ -351,7 +362,8 @@
           {
             "color": "#2a78d6",
             "sounds": [
-              "./assets/sounds/success.mp3"
+              "./assets/sounds/success.mp3",
+              "./assets/sounds/alert.mp3"
             ]
           }
         ],
@@ -362,7 +374,8 @@
             "isAndroidBackgroundLocationEnabled": false,
             "isAndroidForegroundServiceEnabled": false
           }
-        ]
+        ],
+        "expo-audio"
       ],
       "backgroundColor": "#f2f1ed",
       "androidStatusBar": {
@@ -376,7 +389,7 @@
         "android"
       ]
     },
-    "appVersion": "1.0.7",
-    "publishedAt": "2026-10-25T15:36:03.754Z"
+    "appVersion": "1.0.8",
+    "publishedAt": "2026-10-25T17:39:15.242Z"
   }
 }
