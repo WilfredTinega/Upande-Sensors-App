@@ -3,7 +3,6 @@ import { ActivityIndicator, Alert, FlatList, Linking, Modal, Pressable, ScrollVi
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import {
-  PUSH_PROVIDER,
   PUSH_STATUS,
   getPushState,
   openNotificationSettings,
@@ -230,41 +229,6 @@ export function SettingsScreen() {
   );
   const [pushBusy, setPushBusy] = useState(false);
   useEffect(() => subscribeToPushState(setPush), []);
-
-  const pushLine = useMemo(() => {
-    switch (push.status) {
-      case PUSH_STATUS.ON:
-        return {
-          label: 'Alerts on',
-          // Named, because the two routes fail differently: a push that never
-          // arrives on a Firebase build is a server-key problem, on an Expo
-          // build an EAS-credentials one, and the row is where that is read.
-          detail:
-            push.provider === PUSH_PROVIDER.EXPO
-              ? 'Limit breaches are pushed to this phone via Expo.'
-              : 'Limit breaches are pushed to this phone via Firebase.',
-          tone: 'good',
-        };
-      case PUSH_STATUS.DENIED:
-        return { label: 'Alerts off (permission denied)', detail: 'Notifications are blocked for this app.', tone: 'warning' };
-      case PUSH_STATUS.UNCONFIGURED:
-        return {
-          label: 'Alerts need Firebase on this build',
-          detail: 'Add google-services.json and ship a new APK (see README → Push notifications).',
-          tone: null,
-        };
-      case PUSH_STATUS.UNAVAILABLE:
-        return { label: 'Alerts not available on this server', detail: 'The server is older than the app.', tone: null };
-      case PUSH_STATUS.EXPO_GO:
-        return { label: 'Alerts unavailable in Expo Go', detail: 'Remote push needs a built APK; Expo Go dropped it in SDK 53.', tone: null };
-      case PUSH_STATUS.UNSUPPORTED:
-        return { label: 'Alerts off', detail: 'Not available in development or on an emulator.', tone: null };
-      case PUSH_STATUS.FAILED:
-        return { label: 'Alerts off', detail: push.message || 'Registration failed.', tone: 'serious' };
-      default:
-        return { label: 'Alerts', detail: 'Checking…', tone: null };
-    }
-  }, [push]);
 
   /**
    * Re-run registration. Android will not re-prompt once a denial has been
@@ -547,28 +511,8 @@ export function SettingsScreen() {
           </Card>
       </>
 
-      {/* Push alerts for limit breaches. One line of status and, when the
-          answer was "no", the one action that can change it. Never an error
-          box: a phone without alerts is a phone without alerts, and the app
-          works the same either way. */}
       <Card style={{ marginBottom: spacing.xl }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
-          <Ionicons
-            name={push.status === PUSH_STATUS.ON ? 'notifications-outline' : 'notifications-off-outline'}
-            size={22}
-            color={push.status === PUSH_STATUS.ON ? t.accent : t.textMuted}
-          />
-          <View style={{ flex: 1 }}>
-            <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>
-              {pushLine.label}
-            </Text>
-            <Text style={[type.caption, { color: t.textSecondary, marginTop: 2, lineHeight: 16 }]}>
-              {pushLine.detail}
-            </Text>
-          </View>
-          {pushLine.tone ? <StatusChip tone={pushLine.tone} label={pushLine.tone === 'good' ? 'On' : 'Off'} /> : null}
-        </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.border }}>
           <Ionicons name={alertSound ? 'volume-high-outline' : 'volume-mute-outline'} size={22} color={alertSound ? t.accent : t.textMuted} />
           <View style={{ flex: 1 }}>
             <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>Alert sound</Text>
@@ -583,15 +527,13 @@ export function SettingsScreen() {
             thumbColor={t.surface}
           />
         </View>
-        {/* Offered on `unconfigured` too: a phone whose Firebase init raced the
-            registration at sign-in gets a second look without a restart. It
-            cannot rescue a build that shipped without `google-services.json` —
-            Firebase reads that at build time, and no OTA update can add it. */}
+        {/* Offered on `unconfigured` too: a registration that raced the push
+            setup at sign-in gets a second look without a restart. */}
         {push.status === PUSH_STATUS.DENIED ||
         push.status === PUSH_STATUS.FAILED ||
         push.status === PUSH_STATUS.UNCONFIGURED ? (
           <Button
-            label="Turn on"
+            label="Turn on alerts"
             tone="ghost"
             compact
             style={{ marginTop: spacing.md }}
