@@ -856,7 +856,7 @@ export async function searchUsers(txt = '', signal) {
  * roll over. A site without the endpoint rejects with `isMissingEndpoint`,
  * which `push.js` reads as "this server has no alerts".
  */
-export function registerPushToken({ token, platform, device, appVersion, provider }, signal) {
+export function registerPushToken({ token, platform, device, appVersion, provider, alertSound }, signal) {
   return client.call(
     APP_ONLY.registerPushToken,
     {
@@ -865,6 +865,7 @@ export function registerPushToken({ token, platform, device, appVersion, provide
       device: device || undefined,
       app_version: appVersion || undefined,
       provider: provider || undefined,
+      alert_sound: alertSound === undefined ? undefined : alertSound ? 1 : 0,
     },
     { write: true, signal },
   );
@@ -1055,6 +1056,23 @@ export function getFloorPlans({ site, plan = null, doorHours = 24 } = {}, signal
   );
 }
 
+/* ── Pump control ────────────────────────────────────────────────────────── */
+
+/** The caller's pump-control level: `{ can_view, can_switch, ... }`. */
+export function getPumpAccess(signal) {
+  return client.call('upande_sensors.api.access.get_access', {}, { signal });
+}
+
+/** Every Smart Pump socket the caller may see, with live state. */
+export function listPumpSockets({ site } = {}, signal) {
+  return client.call('upande_sensors.api.device_control.list_sockets', site ? { site } : {}, { signal });
+}
+
+/** Queue an ON/OFF downlink; state flips only once the device confirms. */
+export function switchPumpSocket(socket, state) {
+  return client.call('upande_sensors.api.device_control.switch', { socket, state }, { write: true });
+}
+
 /* ── Sensor coordinates and the map ──────────────────────────────────────── */
 
 /**
@@ -1232,9 +1250,9 @@ export async function listUsersForImpersonation(txt = '', signal) {
 }
 
 export async function startImpersonation(user, signal) {
-  return client.call(APP_ONLY.startImpersonation, { user }, { signal, method: 'POST' });
+  return client.call(APP_ONLY.startImpersonation, { user }, { signal, write: true });
 }
 
 export async function stopImpersonation(signal) {
-  return client.call(APP_ONLY.stopImpersonation, {}, { signal, method: 'POST' });
+  return client.call(APP_ONLY.stopImpersonation, {}, { signal, write: true });
 }

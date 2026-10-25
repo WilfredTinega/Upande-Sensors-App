@@ -3,7 +3,6 @@ import { ActivityIndicator, Alert, FlatList, Linking, Modal, Pressable, ScrollVi
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import {
-  PUSH_PROVIDER,
   PUSH_STATUS,
   getPushState,
   openNotificationSettings,
@@ -33,6 +32,15 @@ import { INSTALL_ERRORS, openUnknownAppSourcesSettings } from '../utils/installA
 import { APP_VERSION, useUpdate } from '../context/UpdateContext';
 import { RELEASES_URL } from '../config';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
+import { useDashboard } from '../context/DashboardContext';
+import { invalidate } from '../api/cache';
+import {
+  isAlertSoundEnabled,
+  loadAlertSound,
+  playAlertSound,
+  setAlertSoundEnabled,
+  subscribeToAlertSound,
+} from '../utils/alertSound';
 import { font } from '../theme';
 
 const PRIVILEGED_ROLE = 'System Manager';
@@ -115,14 +123,19 @@ export function SettingsScreen() {
     }
   }, []);
 
+  const { refreshReference } = useDashboard();
   const doImpersonate = useCallback(async (targetUser) => {
     setImpersonateBusy(true);
     try {
       await startImpersonation(targetUser);
       setShowImpersonate(false);
+      // The session now belongs to the other user; everything cached was
+      // loaded as us, so drop it and reload their sites and dashboards.
+      invalidate();
+      refreshReference().catch(() => {});
       Alert.alert(
-        'Now viewing as user',
-        `You are now viewing the app as ${targetUser}. Sign out to return to your own account.`,
+        'Impersonating user',
+        `You are now impersonating ${targetUser}. Stop impersonating to return to your own account.`,
         [{ text: 'OK' }],
       );
       setImpersonatedBy(user?.name || '');
@@ -131,11 +144,11 @@ export function SettingsScreen() {
     } finally {
       setImpersonateBusy(false);
     }
-  }, [user]);
+  }, [user, refreshReference]);
 
   const doStopImpersonation = useCallback(() => {
     Alert.alert(
-      'Stop viewing as user',
+      'Stop impersonating',
       'You will be signed out and need to sign back in as yourself.',
       [
         { text: 'Cancel', style: 'cancel' },
@@ -197,43 +210,25 @@ export function SettingsScreen() {
    * "Turn on" button, whose result arrives asynchronously.
    */
   const [push, setPush] = useState(getPushState());
+  const [alertSound, setAlertSound] = useState(isAlertSoundEnabled());
+  useEffect(() => {
+    loadAlertSound().then(setAlertSound);
+    return subscribeToAlertSound(setAlertSound);
+  }, []);
+  // The background (closed-app) sound is the server's choice of channel per
+  // device, so a change is re-registered with the token when push is on.
+  const onToggleAlertSound = useCallback(
+    (next) => {
+      setAlertSoundEnabled(next);
+      if (next) playAlertSound();
+      if (push.status === PUSH_STATUS.ON) {
+        registerForPushNotifications({ appVersion: APP_VERSION }).catch(() => {});
+      }
+    },
+    [push.status],
+  );
   const [pushBusy, setPushBusy] = useState(false);
   useEffect(() => subscribeToPushState(setPush), []);
-
-  const pushLine = useMemo(() => {
-    switch (push.status) {
-      case PUSH_STATUS.ON:
-        return {
-          label: 'Alerts on',
-          // Named, because the two routes fail differently: a push that never
-          // arrives on a Firebase build is a server-key problem, on an Expo
-          // build an EAS-credentials one, and the row is where that is read.
-          detail:
-            push.provider === PUSH_PROVIDER.EXPO
-              ? 'Limit breaches are pushed to this phone via Expo.'
-              : 'Limit breaches are pushed to this phone via Firebase.',
-          tone: 'good',
-        };
-      case PUSH_STATUS.DENIED:
-        return { label: 'Alerts off (permission denied)', detail: 'Notifications are blocked for this app.', tone: 'warning' };
-      case PUSH_STATUS.UNCONFIGURED:
-        return {
-          label: 'Alerts need Firebase on this build',
-          detail: 'Add google-services.json and ship a new APK (see README → Push notifications).',
-          tone: null,
-        };
-      case PUSH_STATUS.UNAVAILABLE:
-        return { label: 'Alerts not available on this server', detail: 'The server is older than the app.', tone: null };
-      case PUSH_STATUS.EXPO_GO:
-        return { label: 'Alerts unavailable in Expo Go', detail: 'Remote push needs a built APK; Expo Go dropped it in SDK 53.', tone: null };
-      case PUSH_STATUS.UNSUPPORTED:
-        return { label: 'Alerts off', detail: 'Not available in development or on an emulator.', tone: null };
-      case PUSH_STATUS.FAILED:
-        return { label: 'Alerts off', detail: push.message || 'Registration failed.', tone: 'serious' };
-      default:
-        return { label: 'Alerts', detail: 'Checking…', tone: null };
-    }
-  }, [push]);
 
   /**
    * Re-run registration. Android will not re-prompt once a denial has been
@@ -400,7 +395,7 @@ export function SettingsScreen() {
       <View style={{ backgroundColor: '#f59e0b', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 8, gap: 8 }}>
         <Ionicons name="eye-outline" size={14} color="#1c1917" />
         <Text style={{ fontSize: 12, fontWeight: '600', color: '#1c1917' }}>
-          Viewing as {user?.fullName || user?.name}
+          Impersonating {user?.fullName || user?.name}
         </Text>
         <Pressable onPress={doStopImpersonation} style={{ marginLeft: 8, backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 4, paddingHorizontal: 10, paddingVertical: 2 }}>
           <Text style={{ fontSize: 12, fontWeight: '700', color: '#1c1917' }}>Stop</Text>
@@ -516,36 +511,29 @@ export function SettingsScreen() {
           </Card>
       </>
 
-      {/* Push alerts for limit breaches. One line of status and, when the
-          answer was "no", the one action that can change it. Never an error
-          box: a phone without alerts is a phone without alerts, and the app
-          works the same either way. */}
       <Card style={{ marginBottom: spacing.xl }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
-          <Ionicons
-            name={push.status === PUSH_STATUS.ON ? 'notifications-outline' : 'notifications-off-outline'}
-            size={22}
-            color={push.status === PUSH_STATUS.ON ? t.accent : t.textMuted}
-          />
+          <Ionicons name={alertSound ? 'volume-high-outline' : 'volume-mute-outline'} size={22} color={alertSound ? t.accent : t.textMuted} />
           <View style={{ flex: 1 }}>
-            <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>
-              {pushLine.label}
-            </Text>
+            <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>Alert sound</Text>
             <Text style={[type.caption, { color: t.textSecondary, marginTop: 2, lineHeight: 16 }]}>
-              {pushLine.detail}
+              {alertSound ? 'Plays the alert tone when a breach comes in.' : 'Alerts arrive silently.'}
             </Text>
           </View>
-          {pushLine.tone ? <StatusChip tone={pushLine.tone} label={pushLine.tone === 'good' ? 'On' : 'Off'} /> : null}
+          <Switch
+            value={alertSound}
+            onValueChange={onToggleAlertSound}
+            trackColor={{ false: t.surfaceSunken, true: t.accent }}
+            thumbColor={t.surface}
+          />
         </View>
-        {/* Offered on `unconfigured` too: a phone whose Firebase init raced the
-            registration at sign-in gets a second look without a restart. It
-            cannot rescue a build that shipped without `google-services.json` —
-            Firebase reads that at build time, and no OTA update can add it. */}
+        {/* Offered on `unconfigured` too: a registration that raced the push
+            setup at sign-in gets a second look without a restart. */}
         {push.status === PUSH_STATUS.DENIED ||
         push.status === PUSH_STATUS.FAILED ||
         push.status === PUSH_STATUS.UNCONFIGURED ? (
           <Button
-            label="Turn on"
+            label="Turn on alerts"
             tone="ghost"
             compact
             style={{ marginTop: spacing.md }}
@@ -605,7 +593,7 @@ export function SettingsScreen() {
         ) : null}
         {canImpersonate && !impersonatedBy ? (
           <Button
-            label="View as user…"
+            label="Impersonate user…"
             tone="ghost"
             style={{ marginTop: spacing.sm }}
             onPress={() => {
@@ -777,15 +765,15 @@ export function SettingsScreen() {
       onRequestClose={() => setShowImpersonate(false)}
     >
       <Pressable
-        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 20 }}
+        style={{ flex: 1, backgroundColor: t.mode === 'dark' ? 'rgba(0,0,0,0.65)' : 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 20 }}
         onPress={() => setShowImpersonate(false)}
       >
         <Pressable
-          style={{ width: '100%', maxWidth: 420, backgroundColor: t.surface, borderRadius: 12, overflow: 'hidden', maxHeight: '80%' }}
+          style={{ width: '100%', maxWidth: 420, backgroundColor: t.surface, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: t.border, overflow: 'hidden', maxHeight: '80%' }}
           onPress={(e) => e.stopPropagation()}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.border }}>
-            <Text style={{ fontSize: 16, fontWeight: '600', color: t.text }}>View as user</Text>
+            <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>Impersonate user</Text>
             <Pressable onPress={() => setShowImpersonate(false)} hitSlop={8}>
               <Ionicons name="close" size={20} color={t.textMuted} />
             </Pressable>
@@ -793,7 +781,9 @@ export function SettingsScreen() {
           <View style={{ padding: 12 }}>
             <TextInput
               ref={impersonateSearchRef}
-              style={{ borderWidth: 1, borderColor: t.border, borderRadius: 8, padding: 10, fontSize: 14, color: t.text, backgroundColor: t.background }}
+              style={[type.body, { borderWidth: 1, borderColor: t.borderStrong, borderRadius: 8, padding: 10, color: t.textPrimary, backgroundColor: t.surfaceSunken }]}
+              keyboardAppearance={t.mode === 'dark' ? 'dark' : 'light'}
+              selectionColor={t.accent}
               placeholder="Search by name or email…"
               placeholderTextColor={t.textMuted}
               value={impersonateSearch}
@@ -812,7 +802,8 @@ export function SettingsScreen() {
               keyExtractor={(item) => item.value}
               style={{ maxHeight: 340 }}
               contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: 12 }}
-              ListEmptyComponent={<Text style={{ textAlign: 'center', color: t.textMuted, fontSize: 13, padding: 20 }}>No users found</Text>}
+              ListEmptyComponent={<Text style={[type.caption, { textAlign: 'center', color: t.textMuted, padding: 20 }]}>No users found</Text>}
+              ItemSeparatorComponent={() => <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: t.border, marginLeft: 50 }} />}
               renderItem={({ item }) => (
                 <Pressable
                   disabled={impersonateBusy}
@@ -830,7 +821,14 @@ export function SettingsScreen() {
                   <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: t.accentSoft, alignItems: 'center', justifyContent: 'center' }}>
                     <Ionicons name="person-outline" size={16} color={t.accent} />
                   </View>
-                  <Text style={{ fontSize: 13, color: t.text, flex: 1 }}>{item.label}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text numberOfLines={1} style={[type.body, { color: t.textPrimary }]}>
+                      {String(item.label || item.value).split(' · ')[0]}
+                    </Text>
+                    <Text numberOfLines={1} style={[type.caption, { color: t.textSecondary, marginTop: 1 }]}>
+                      {item.value}
+                    </Text>
+                  </View>
                 </Pressable>
               )}
             />

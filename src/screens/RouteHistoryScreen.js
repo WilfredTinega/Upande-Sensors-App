@@ -400,43 +400,29 @@ export function RouteHistoryScreen() {
     />
   );
 
-  /**
-   * Rendered into the header rather than the page, so the title and the switch
-   * share a row. `setOptions` is how a screen contributes to its own header;
-   * lifting `view` into a context purely for placement would be worse.
-   */
   useEffect(() => {
     if (!roles.loading && !isSystemManager && view !== 'issues') setView('issues');
   }, [roles.loading, isSystemManager, view]);
 
   useLayoutEffect(() => {
-    navigation.setOptions({
-      // A fourth segment needs the width, and it has to come from the title:
-      // squeezing the switch instead would clip the labels to initials. The
-      // shorter word says the same thing next to a control that names each
-      // view anyway.
-      headerTitle: isSystemManager ? 'Activity' : 'App activity',
-      // With one view there is nothing to switch between, so the control goes
-      // rather than sitting there as a single dead tab.
-      headerRight: isSystemManager
-        ? () => (
-            <View style={{ paddingRight: spacing.md, width: 252 }}>
-              <Segmented
-                compact
-                options={[
-                  { label: 'Screens', value: 'screens' },
-                  { label: 'Sign-ins', value: 'sessions' },
-                  { label: 'Devices', value: 'devices' },
-                  { label: 'Issues', value: 'issues' },
-                ]}
-                value={view}
-                onChange={setView}
-              />
-            </View>
-          )
-        : undefined,
-    });
-  }, [navigation, view, isSystemManager]);
+    navigation.setOptions({ headerTitle: isSystemManager ? 'Activity' : 'App activity' });
+  }, [navigation, isSystemManager]);
+
+  // In the page, not the header: beside the back button and title, four
+  // segments overran the title on a phone-width header.
+  const viewPicker = isSystemManager ? (
+    <Segmented
+      style={{ marginBottom: spacing.md }}
+      options={[
+        { label: 'Screens', value: 'screens' },
+        { label: 'Sign-ins', value: 'sessions' },
+        { label: 'Devices', value: 'devices' },
+        { label: 'Issues', value: 'issues' },
+      ]}
+      value={view}
+      onChange={setView}
+    />
+  ) : null;
 
   /** Sign-ins: counts, per-day volume, then the in/out trail. */
   const sessionsView = (
@@ -1046,6 +1032,8 @@ export function RouteHistoryScreen() {
         />
       }
     >
+      {roles.loading ? null : viewPicker}
+
       {/* No range on Devices either: the register is a running total, not a
           window — see the `installs` query. */}
       {roles.loading ? null : view === 'issues' || view === 'devices' ? null : rangePicker}

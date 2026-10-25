@@ -10,8 +10,8 @@ import React, {
 
 import * as SecureStore from 'expo-secure-store';
 
-import { TTL_REFERENCE, cacheKey, invalidate } from '../api/cache';
-import { getDashboardConfig, getServerTimezone, getUserSites } from '../api/endpoints';
+import { TTL_LIVE, TTL_REFERENCE, cacheKey, invalidate } from '../api/cache';
+import { getDashboardConfig, getDashboardHealth, getServerTimezone, getUserSites } from '../api/endpoints';
 import { fetchLiveForSite, latestStamp } from '../api/liveSite';
 import { useQuery } from '../hooks/useQuery';
 import { goToDashboard } from '../navigation/ref';
@@ -277,10 +277,50 @@ export function DashboardProvider({ children }) {
     };
   }, [sites, site, sitesQuery.loading]);
 
-  const activeTab = useMemo(
-    () => tabs.find((t) => t.name === activeTabName) || tabs[0] || null,
-    [tabs, activeTabName],
+  /**
+   * Per-dashboard sensor counts for the selected site (Home's tiles), and the
+   * dashboards left once those with no sensors attached there are hidden — on
+   * Home, in the sidebar, and as the Dashboard screen's active tab.
+   *
+   * Owned here, once: two screens each holding their own copy drifted apart
+   * after a refresh and fought over the active tab. The payload is tagged with
+   * the site it was fetched for and only used for THAT site, so a site switch
+   * never filters the new site with the old one's counts. Unknown is not
+   * empty: while loading, on error, for "All sites", or for a tab the payload
+   * does not mention, nothing is hidden.
+   */
+  const healthPending = sitePending || sitesQuery.loading;
+  const healthQuery = useQuery(
+    healthPending ? null : cacheKey('dashboard_health', { site }),
+    () => getDashboardHealth(site).then((payload) => ({ site, payload })),
+    { ttl: TTL_LIVE },
   );
+  const healthData =
+    !healthPending && healthQuery.data && healthQuery.data.site === site && !healthQuery.error
+      ? healthQuery.data.payload
+      : null;
+  const healthUnsupported = Boolean(healthQuery.error?.isMissingEndpoint);
+
+  const visibleTabs = useMemo(() => {
+    const rows = healthData?.tabs;
+    if (!site || !rows || typeof rows !== 'object') return tabs;
+    return tabs.filter((tab) => {
+      const row = rows[tab.name];
+      if (!row || typeof row !== 'object') return true;
+      return Number(row.total) > 0;
+    });
+  }, [tabs, site, healthData]);
+  const noVisibleTabs = tabs.length > 0 && visibleTabs.length === 0;
+
+  const activeTab = useMemo(() => {
+    if (noVisibleTabs) return null;
+    return (
+      visibleTabs.find((t) => t.name === activeTabName) ||
+      tabs.find((t) => t.name === activeTabName && visibleTabs === tabs) ||
+      visibleTabs[0] ||
+      null
+    );
+  }, [tabs, visibleTabs, activeTabName, noVisibleTabs]);
 
   /**
    * The tag the server uses to hide sensors belonging to a different tab
@@ -430,6 +470,11 @@ export function DashboardProvider({ children }) {
     [tabs],
   );
 
+  // Set the active dashboard without navigating or resetting the sensor type —
+  // for when the current one is hidden (no sensors at the site) and the first
+  // visible one has to take its place.
+  const pickTab = useCallback((name) => setActiveTabName(name), []);
+
   const refreshReference = useCallback(async () => {
     invalidate('user_sites');
     invalidate('dashboard_config');
@@ -459,6 +504,13 @@ export function DashboardProvider({ children }) {
       activeTab,
       activeTabName: activeTab?.name || null,
       selectTab,
+      pickTab,
+      visibleTabs,
+      noVisibleTabs,
+      dashboardHealth: healthData,
+      healthLoading: healthQuery.loading || healthPending,
+      healthUnsupported,
+      refreshHealth: healthQuery.refresh,
       tabTag,
       configLoading: configQuery.loading,
       configError: configQuery.error,
@@ -466,7 +518,6 @@ export function DashboardProvider({ children }) {
       // Trimmed here so a field left as whitespace in Sensor Settings reads as
       // unset everywhere, rather than rendering a blank line on Home.
       welcomeMessage: String(appSettings.welcome_message || '').trim() || null,
-      supportContact: String(appSettings.support_contact || '').trim() || null,
 
       sensorType,
       setSensorType,
@@ -492,6 +543,14 @@ export function DashboardProvider({ children }) {
       tabs,
       activeTab,
       selectTab,
+      pickTab,
+      visibleTabs,
+      noVisibleTabs,
+      healthData,
+      healthQuery.loading,
+      healthQuery.refresh,
+      healthPending,
+      healthUnsupported,
       tabTag,
       configQuery.loading,
       configQuery.error,

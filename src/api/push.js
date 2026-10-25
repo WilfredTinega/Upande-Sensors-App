@@ -54,6 +54,7 @@ import * as Device from 'expo-device';
 import { Linking, Platform } from 'react-native';
 
 import { FrappeError, registerPushToken, unregisterPushToken } from './endpoints';
+import { loadAlertSound } from '../utils/alertSound';
 
 const IS_DEV = typeof __DEV__ !== 'undefined' && __DEV__;
 
@@ -84,6 +85,15 @@ const CHANNEL_ID = 'alerts-v2';
  * ship a custom sound through Expo Go.
  */
 const CHANNEL_SOUND = 'success.mp3';
+
+/**
+ * The Alert sound switch picks between these two (see utils/alertSound.js);
+ * the server sends each push on the one this device's token asked for. Kept
+ * beside CHANNEL_ID, which older server code may still name.
+ */
+const SOUND_CHANNEL_ID = 'alerts-v3';
+const SILENT_CHANNEL_ID = 'alerts-silent-v1';
+const ALERT_SOUND = 'alert.mp3';
 
 /** The one push type this app knows how to act on. */
 export const PUSH_TYPE_LIMIT_ALERT = 'limit_alert';
@@ -267,6 +277,22 @@ export async function registerForPushNotifications({ appVersion } = {}) {
         lightColor: '#2a78d6',
         sound: CHANNEL_SOUND,
       });
+      await Notifications.setNotificationChannelAsync(SOUND_CHANNEL_ID, {
+        name: 'Limit alerts',
+        description: 'A sensor reading crossed one of its configured limits.',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#2a78d6',
+        sound: ALERT_SOUND,
+      });
+      await Notifications.setNotificationChannelAsync(SILENT_CHANNEL_ID, {
+        name: 'Limit alerts (silent)',
+        description: 'Limit alerts while Alert sound is off in the app.',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#2a78d6',
+        sound: null,
+      });
     }
 
     let { status: permission } = await Notifications.getPermissionsAsync();
@@ -293,6 +319,7 @@ export async function registerForPushNotifications({ appVersion } = {}) {
       device: Device.modelName || null,
       appVersion: appVersion || null,
       provider: issued.provider,
+      alertSound: (await loadAlertSound()) ? 1 : 0,
     });
     setState({ status: PUSH_STATUS.ON, token: issued.token, provider: issued.provider, message: null });
   } catch (err) {
@@ -366,7 +393,9 @@ export function installForegroundHandler() {
       handleNotification: async () => ({
         shouldShowBanner: true,
         shouldShowList: true,
-        shouldPlaySound: true,
+        // In the foreground the app plays the alert tone itself (when the bell
+        // count rises), so the channel sound would only double it.
+        shouldPlaySound: false,
         shouldSetBadge: false,
       }),
     });
@@ -399,7 +428,7 @@ export function watchNotificationTaps(onTap) {
 
     const data = request?.content?.data;
     if (!data || data.type !== PUSH_TYPE_LIMIT_ALERT) return;
-    onTap();
+    onTap(data);
   };
 
   let sub = null;

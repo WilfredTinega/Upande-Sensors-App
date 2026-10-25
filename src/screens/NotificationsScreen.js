@@ -1,19 +1,19 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useFocusEffect } from '@react-navigation/native';
+import * as SecureStore from 'expo-secure-store';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 
 import { Button, Card, EmptyState, ErrorView, SectionTitle, StatusChip } from '../components/ui';
 import { SkeletonList } from '../components/Skeleton';
 import { getAlerts } from '../api/endpoints';
-import { useDashboard } from '../context/DashboardContext';
 import { useNotifications } from '../context/NotificationsContext';
 import { useUpdate } from '../context/UpdateContext';
-import { goToAccount, goToLive } from '../navigation/ref';
+import { goToAccount } from '../navigation/ref';
 import { useTheme, spacing, type } from '../hooks/useTheme';
 import { font } from '../theme';
 import { directionChip, groupAlertsBySite, isUnreadAlert } from '../utils/alerts';
-import { relativeTime } from '../utils/dates';
+import { fullTimestamp, relativeTime } from '../utils/dates';
 
 /**
  * Every limit breach the account may see, newest first, reached from the bell
@@ -34,6 +34,10 @@ import { relativeTime } from '../utils/dates';
 const PAGE_SIZE = 30;
 /** The window the empty state names. Matches the server's default. */
 const SINCE_DAYS = 30;
+/** Alerts opened in the message modal, so their unread dot stays off. */
+const KEY_READ = 'upande_sensors_read_alerts';
+/** Enough to cover the 30-day window many times over; oldest dropped first. */
+const MAX_READ = 500;
 
 /**
  * One alert. The unread dot is the ONLY thing that changes between read and
@@ -48,7 +52,7 @@ function AlertRow({ row, unread, onPress, last }) {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${unread ? 'Unread. ' : ''}${row.title || 'Alert'}. Open live readings for ${row.site || 'this site'}`}
+      accessibilityLabel={`${unread ? 'Unread. ' : ''}${row.title || 'Alert'}. Open the alert message`}
       onPress={onPress}
       style={({ pressed }) => ({
         flexDirection: 'row',
@@ -95,9 +99,78 @@ function AlertRow({ row, unread, onPress, last }) {
   );
 }
 
+function fmtNum(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : String(v);
+}
+
+/**
+ * The full alert, read in place. A tapped notification is a message to READ —
+ * opening Live instead dropped the reader on a screen that no longer showed
+ * the breach once the reading moved on.
+ */
+function AlertModal({ row, onClose }) {
+  const t = useTheme();
+  if (!row) return null;
+  const chip = directionChip(row.direction);
+  const unit = row.unit || '';
+  const details = [
+    ['Site', row.site || '—'],
+    ['Sensor', row.sensor_name || '—'],
+    ['Measure', row.measure || '—'],
+    ['Value', `${fmtNum(row.value)}${unit}`],
+    ['Limit', `${fmtNum(row.limit_min)} – ${fmtNum(row.limit_max)}${unit}`],
+    ['Reading time', fullTimestamp(row.reading_timestamp) || '—'],
+    ['Alerted', fullTimestamp(row.creation) || '—'],
+  ];
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable
+        onPress={onClose}
+        style={{
+          flex: 1,
+          justifyContent: 'center',
+          padding: spacing.lg,
+          backgroundColor: t.mode === 'dark' ? 'rgba(0,0,0,0.65)' : 'rgba(0,0,0,0.4)',
+        }}
+      >
+        <Pressable
+          onPress={(e) => e.stopPropagation()}
+          style={{
+            backgroundColor: t.surface,
+            borderRadius: 12,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: t.border,
+            padding: spacing.lg,
+          }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm }}>
+            <Text style={[type.body, { flex: 1, color: t.textPrimary, fontWeight: '700', fontFamily: font('700'), lineHeight: 20 }]}>
+              {row.title || row.sensor_name || 'Limit alert'}
+            </Text>
+            <StatusChip tone={chip.tone} label={chip.label} />
+          </View>
+          {row.body ? (
+            <Text style={[type.body, { color: t.textSecondary, marginTop: spacing.sm, lineHeight: 20 }]}>{row.body}</Text>
+          ) : null}
+          <View style={{ marginTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.border }}>
+            {details.map(([label, value]) => (
+              <View key={label} style={{ flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md, paddingVertical: 6 }}>
+                <Text style={[type.caption, { color: t.textMuted }]}>{label}</Text>
+                <Text style={[type.caption, { color: t.textPrimary, flexShrink: 1, textAlign: 'right' }]}>{value}</Text>
+              </View>
+            ))}
+          </View>
+          <Button label="Close" tone="ghost" compact style={{ marginTop: spacing.md }} onPress={onClose} />
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 export function NotificationsScreen() {
   const t = useTheme();
-  const { setSite } = useDashboard();
   const { markOpened } = useNotifications();
   const { available: updateAvailable, update } = useUpdate();
 
@@ -163,10 +236,14 @@ export function NotificationsScreen() {
    * badge is zero, and the cursor is moving to the server's newest row.
    */
   const [threshold, setThreshold] = useState(null);
+  const [selected, setSelected] = useState(null);
   useFocusEffect(
     useCallback(() => {
       setThreshold(markOpened());
       load(rowsRef.current ? 'refresh' : 'load');
+      // Leaving the screen closes an open message, so it is not still up
+      // (over another tab) the next time this one is visited.
+      return () => setSelected(null);
     }, [markOpened, load]),
   );
 
@@ -178,18 +255,66 @@ export function NotificationsScreen() {
     load('refresh');
   }, [markOpened, load]);
 
+  // Alerts opened in the modal are read from then on, whatever the cursor says.
+  const [readNames, setReadNames] = useState(() => new Set());
+  useEffect(() => {
+    SecureStore.getItemAsync(KEY_READ)
+      .then((raw) => {
+        const names = JSON.parse(raw || '[]');
+        if (Array.isArray(names)) setReadNames((prev) => new Set([...names, ...prev]));
+      })
+      .catch(() => {});
+  }, []);
+  const markRead = useCallback((name) => {
+    if (!name) return;
+    setReadNames((prev) => {
+      if (prev.has(name)) return prev;
+      const next = new Set(prev);
+      next.add(name);
+      const kept = [...next].slice(-MAX_READ);
+      SecureStore.setItemAsync(KEY_READ, JSON.stringify(kept)).catch(() => {});
+      return new Set(kept);
+    });
+  }, []);
   const open = useCallback(
     (row) => {
-      if (row.site) setSite(row.site);
-      goToLive();
+      setSelected(row);
+      markRead(row?.name);
     },
-    [setSite],
+    [markRead],
   );
+
+  // A tapped push lands here with the alert's name; open it as soon as the list
+  // that contains it has loaded, then drop the param so a later visit does not
+  // reopen it.
+  const route = useRoute();
+  const navigation = useNavigation();
+  const pushedAlert = route.params?.alert || null;
+  // The rows on screen when the push arrived may predate the alert; the focus
+  // refresh brings it. Give up only once a list loaded AFTER the tap lacks it.
+  const staleRowsRef = useRef(undefined);
+  useEffect(() => {
+    if (!pushedAlert) {
+      staleRowsRef.current = undefined;
+      return;
+    }
+    if (staleRowsRef.current === undefined) staleRowsRef.current = rows;
+    if (!rows) return;
+    const hit = rows.find((r) => r.name === pushedAlert);
+    if (hit) {
+      setSelected(hit);
+      markRead(hit.name);
+    } else if (rows === staleRowsRef.current) {
+      return; // still the pre-tap list; wait for the refresh
+    }
+    staleRowsRef.current = undefined;
+    navigation.setParams({ alert: undefined });
+  }, [pushedAlert, rows, navigation, markRead]);
 
   const list = rows || [];
   // Site is the first question a reader asks of a breach list ("where?"), so
   // the view is grouped by site, with unread sites first.
-  const groups = groupAlertsBySite(list, threshold);
+  const groups = groupAlertsBySite(list, threshold, readNames);
   const hasMore = total === null ? list.length > 0 && list.length % PAGE_SIZE === 0 : list.length < total;
   const unsupported = Boolean(error?.isMissingEndpoint);
 
@@ -271,7 +396,7 @@ export function NotificationsScreen() {
                   <AlertRow
                     key={row.name || `${row.sensor_name}-${row.creation}-${i}`}
                     row={row}
-                    unread={isUnreadAlert(row, threshold)}
+                    unread={isUnreadAlert(row, threshold) && !readNames.has(row.name)}
                     onPress={() => open(row)}
                     last={i === group.rows.length - 1}
                   />
@@ -303,6 +428,7 @@ export function NotificationsScreen() {
           )}
         </>
       )}
+      <AlertModal row={selected} onClose={() => setSelected(null)} />
     </ScrollView>
   );
 }
