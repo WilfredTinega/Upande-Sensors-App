@@ -24,6 +24,7 @@ import {
 } from '../utils/measures';
 import { liveKey, loadLiveForSite } from '../api/liveSite';
 import { FLOOR_PLAN_SLUG, FloorPlanScreen } from './FloorPlanScreen';
+import { PUMP_CONTROL_SLUGS, PumpControlScreen } from './PumpControlScreen';
 import { useDashboard } from '../context/DashboardContext';
 import { useQuery } from '../hooks/useQuery';
 import { useTheme, spacing, radius, type } from '../hooks/useTheme';
@@ -61,6 +62,7 @@ const EMPTY_TREND = { labels: [], series: [] };
 export function ChartsScreen() {
   const { activeTab } = useDashboard();
   if (activeTab?.slug === FLOOR_PLAN_SLUG) return <FloorPlanScreen />;
+  if (PUMP_CONTROL_SLUGS.includes(activeTab?.slug)) return <PumpControlScreen />;
   return <ChartsTabScreen />;
 }
 
