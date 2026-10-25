@@ -159,7 +159,8 @@ function TabRow({ tab }) {
  */
 export function FloatingSidebar() {
   const t = useTheme();
-  const { sidebarOpen, closeSidebar, tabs, configLoading, configError } = useDashboard();
+  // Dashboards with no sensors at the selected site are left out, as on Home.
+  const { sidebarOpen, closeSidebar, tabs, visibleTabs, configLoading, configError } = useDashboard();
 
   const { user, baseUrl } = useAuth();
   // Measured rather than a fixed 44pt guess, so the header clears the status
@@ -298,8 +299,8 @@ export function FloatingSidebar() {
               >
                 ▲ Couldn’t load tabs — {configError.message}
               </Text>
-            ) : tabs.length ? (
-              tabs.map((tab) => (
+            ) : visibleTabs.length ? (
+              visibleTabs.map((tab) => (
                 <TabRow key={tab.name} tab={tab} />
               ))
             ) : (
@@ -309,7 +310,9 @@ export function FloatingSidebar() {
                   { color: t.textMuted, paddingHorizontal: spacing.md, lineHeight: 17 },
                 ]}
               >
-                No tabs are enabled in Sensor Settings for your account.
+                {tabs.length
+                  ? 'No dashboard has sensors at this site.'
+                  : 'No tabs are enabled in Sensor Settings for your account.'}
               </Text>
             )}
 

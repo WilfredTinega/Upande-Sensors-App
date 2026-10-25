@@ -1,6 +1,5 @@
 import React, { useCallback, useMemo } from 'react';
 import {
-  Linking,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -14,7 +13,6 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Card, EmptyState, SectionTitle, SelectField, StatusChip } from '../components/ui';
 import { Skeleton } from '../components/Skeleton';
 import { TTL_LIVE, cacheKey, invalidate } from '../api/cache';
-import { getDashboardHealth } from '../api/endpoints';
 import { latestStamp, liveKey, loadLiveForSite, siteKey } from '../api/liveSite';
 import { useAuth } from '../context/AuthContext';
 import { useDashboard } from '../context/DashboardContext';
@@ -402,63 +400,6 @@ function TabCard({ tab, width, active, onPress, health, healthLoading, showHealt
 /** Icon 36 + gap 8 + title 46 + counts row 18 + card padding 32. */
 const TILE_HEIGHT = 140;
 
-/**
- * A phone number or an email, as configured. Anything with an `@` is mail;
- * anything that is digits with the usual punctuation is a call; anything else
- * — a name, a desk, "ask the office" — is shown but not made tappable, because
- * a link that opens nothing is worse than plain text.
- */
-function contactHref(contact) {
-  const text = String(contact || '').trim();
-  if (!text) return null;
-  if (text.includes('@')) return `mailto:${text}`;
-  if (/^\+?[\d\s().-]{6,}$/.test(text)) return `tel:${text.replace(/[^\d+]/g, '')}`;
-  return null;
-}
-
-function SupportLine({ contact }) {
-  const t = useTheme();
-  const href = contactHref(contact);
-  const open = useCallback(() => {
-    if (!href) return;
-    Linking.openURL(href).catch(() => {
-      // No dialler or mail app on this device. The text is still on screen.
-    });
-  }, [href]);
-
-  return (
-    <Pressable
-      accessibilityRole={href ? 'link' : 'text'}
-      disabled={!href}
-      onPress={open}
-      style={({ pressed }) => ({
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.sm,
-        paddingVertical: spacing.md,
-        paddingHorizontal: spacing.xs,
-        opacity: pressed ? 0.7 : 1,
-      })}
-    >
-      <Ionicons
-        name={href?.startsWith('tel:') ? 'call-outline' : 'help-buoy-outline'}
-        size={17}
-        color={t.textSecondary}
-      />
-      <Text style={[type.caption, { color: t.textSecondary }]}>Support</Text>
-      <Text
-        numberOfLines={1}
-        style={[
-          type.caption,
-          { color: href ? t.accent : t.textPrimary, flex: 1, fontFamily: font('600') },
-        ]}
-      >
-        {contact}
-      </Text>
-    </Pressable>
-  );
-}
-
 /* ── Screen ──────────────────────────────────────────────────────────────── */
 
 export function HomeScreen() {
@@ -477,7 +418,6 @@ export function HomeScreen() {
     configLoading,
     configError,
     welcomeMessage,
-    supportContact,
     unitForType,
     refreshReference,
   } = useDashboard();
@@ -525,15 +465,16 @@ export function HomeScreen() {
    * rest: on a server without it the cards simply carry no counts line — a
    * row of zeros would claim every dashboard is empty.
    */
-  const health = useQuery(
-    sitePending ? null : cacheKey('dashboard_health', { site }),
-    () => getDashboardHealth(site),
-    { ttl: TTL_LIVE },
-  );
-  // A server with neither the app method nor the Server Script deployed. The
-  // tiles then carry no count at all: a fallback number would be the site's
-  // total wearing a dashboard's name.
-  const healthUnsupported = Boolean(health.error?.isMissingEndpoint);
+  // Per-dashboard tallies for the selected site, and the dashboards left once
+  // the ones with no sensors attached there are hidden. On a server without the
+  // health method the tiles carry no counts and nothing is hidden.
+  const {
+    visibleTabs,
+    dashboardHealth,
+    healthLoading,
+    healthUnsupported,
+    refreshHealth,
+  } = useDashboard();
 
   const refresh = useCallback(async () => {
     // Gated on `sitePending`, not `site`: "All sites" is `site === null` once
@@ -550,10 +491,10 @@ export function HomeScreen() {
     }
     await Promise.all([
       !sitePending ? live.refresh() : Promise.resolve(),
-      !sitePending && !healthUnsupported ? health.refresh() : Promise.resolve(),
+      !sitePending && !healthUnsupported ? refreshHealth() : Promise.resolve(),
       refreshReference(),
     ]);
-  }, [site, sitePending, live, health, healthUnsupported, refreshReference]);
+  }, [site, sitePending, live, refreshHealth, healthUnsupported, refreshReference]);
 
   const pending = sitePending || sitesLoading || live.loading;
   const refreshing = live.refreshing;
@@ -621,9 +562,9 @@ export function HomeScreen() {
         >
           ▲ Couldn’t load tabs — {configError.message}
         </Text>
-      ) : tabs.length ? (
+      ) : visibleTabs.length ? (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.xl }}>
-          {tabs.map((tab) => (
+          {visibleTabs.map((tab) => (
             <TabCard
               key={tab.name}
               tab={tab}
@@ -631,9 +572,9 @@ export function HomeScreen() {
               active={tab.name === activeTabName}
               onPress={() => selectTab(tab.name)}
               showHealth={Boolean(site) && !healthUnsupported}
-              healthLoading={health.loading || sitePending}
+              healthLoading={healthLoading}
               // By `tab.name` and nothing else — see `healthForTab`.
-              health={healthForTab(health.data, tab)}
+              health={healthForTab(dashboardHealth, tab)}
             />
           ))}
         </View>
@@ -641,12 +582,15 @@ export function HomeScreen() {
         <Card style={{ marginBottom: spacing.xl }}>
           <EmptyState
             title="No dashboards"
-            message="No tabs are enabled in Sensor Settings for your account."
+            message={
+              tabs.length
+                ? `No dashboard has sensors at ${site || 'this site'}.`
+                : 'No tabs are enabled in Sensor Settings for your account.'
+            }
           />
         </Card>
       )}
 
-      {supportContact ? <SupportLine contact={supportContact} /> : null}
     </ScrollView>
   );
 }

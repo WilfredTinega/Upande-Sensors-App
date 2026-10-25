@@ -59,8 +59,20 @@ const EMPTY_TREND = { labels: [], series: [] };
  * them mid-component would change the hook order. As sibling components React
  * unmounts one and mounts the other, which is what actually happens anyway.
  */
+function NoDashboards({ site }) {
+  const t = useTheme();
+  return (
+    <View style={{ flex: 1, backgroundColor: t.background, padding: spacing.lg }}>
+      <Card>
+        <EmptyState title="No dashboards" message={`No dashboard has sensors at ${site || 'this site'}.`} />
+      </Card>
+    </View>
+  );
+}
+
 export function ChartsScreen() {
-  const { activeTab } = useDashboard();
+  const { activeTab, noVisibleTabs, site } = useDashboard();
+  if (noVisibleTabs) return <NoDashboards site={site} />;
   if (activeTab?.slug === FLOOR_PLAN_SLUG) return <FloorPlanScreen />;
   if (PUMP_CONTROL_SLUGS.includes(activeTab?.slug)) return <PumpControlScreen />;
   return <ChartsTabScreen />;
