@@ -12,7 +12,7 @@ import { useUpdate } from '../context/UpdateContext';
 import { goToAccount, goToLive } from '../navigation/ref';
 import { useTheme, spacing, type } from '../hooks/useTheme';
 import { font } from '../theme';
-import { directionChip, groupAlertsByDay, isUnreadAlert } from '../utils/alerts';
+import { directionChip, groupAlertsBySite, isUnreadAlert } from '../utils/alerts';
 import { relativeTime } from '../utils/dates';
 
 /**
@@ -187,7 +187,9 @@ export function NotificationsScreen() {
   );
 
   const list = rows || [];
-  const groups = groupAlertsByDay(list);
+  // Site is the first question a reader asks of a breach list ("where?"), so
+  // the view is grouped by site, with unread sites first.
+  const groups = groupAlertsBySite(list, threshold);
   const hasMore = total === null ? list.length > 0 && list.length % PAGE_SIZE === 0 : list.length < total;
   const unsupported = Boolean(error?.isMissingEndpoint);
 
@@ -253,7 +255,17 @@ export function NotificationsScreen() {
         <>
           {groups.map((group) => (
             <View key={group.key} style={{ marginBottom: spacing.lg }}>
-              <SectionTitle>{group.label}</SectionTitle>
+              {/* Site label on the left, unread tally on the right, in one
+                  row. The tally is the one number worth reading before
+                  deciding whether to expand mentally into the rows below. */}
+              <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: spacing.xs }}>
+                <SectionTitle>{group.label}</SectionTitle>
+                <Text style={[type.caption, { color: group.unreadCount ? t.accent : t.textMuted }]}>
+                  {group.unreadCount
+                    ? `${group.unreadCount} unread · ${group.rows.length} total`
+                    : `${group.rows.length} total`}
+                </Text>
+              </View>
               <Card>
                 {group.rows.map((row, i) => (
                   <AlertRow

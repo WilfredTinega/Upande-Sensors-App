@@ -70,6 +70,50 @@ export function groupAlertsByDay(rows, now = new Date()) {
 }
 
 /**
+ * Group rows by `site`, preserving each site's internal (newest-first) order
+ * and reporting unread counts so the per-site header can show a badge.
+ *
+ * Sites with unread alerts sort first, then by name — a scrollable list of
+ * notifications is read for "where should I look", and the sites with new
+ * breaches are the answer. Rows with a missing site fall into "Unknown site"
+ * at the end rather than being dropped, same policy as the day grouper.
+ *
+ * `cursor` is passed through so the per-site unread tally uses the same
+ * definition of "new since last opened" as the row-level dot.
+ */
+export function groupAlertsBySite(rows, cursor) {
+  const groups = [];
+  const byKey = new Map();
+  let unknown = null;
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const site = String(row?.site || '').trim();
+    const key = site || '__unknown__';
+    let group = byKey.get(key);
+    if (!group) {
+      group = { key, label: site || 'Unknown site', rows: [], unreadCount: 0 };
+      byKey.set(key, group);
+      if (site) groups.push(group);
+      else unknown = group;
+    }
+    group.rows.push(row);
+    if (isUnreadAlert(row, cursor)) group.unreadCount += 1;
+  });
+  if (unknown) groups.push(unknown);
+  // Sites with unread alerts first, then alphabetical by site name. 'Unknown
+  // site' always sinks to the end because its label starts with 'U' uppercase
+  // and because that's where the ambiguous rows belong anyway.
+  groups.sort((a, b) => {
+    const aUnread = a.unreadCount > 0;
+    const bUnread = b.unreadCount > 0;
+    if (aUnread !== bUnread) return aUnread ? -1 : 1;
+    if (a.key === '__unknown__') return 1;
+    if (b.key === '__unknown__') return -1;
+    return a.label.localeCompare(b.label);
+  });
+  return groups;
+}
+
+/**
  * Was this alert raised after the list was last opened?
  *
  * `cursor` is the `creation` of the newest alert the server knew of when the
