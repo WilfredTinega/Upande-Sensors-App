@@ -50,7 +50,7 @@ const TAB_ICONS = [
   ['water', 'water-outline'],
   ['power', 'flash-outline'],
   ['energy', 'flash-outline'],
-  ['pump', 'cog-outline'],
+  ['pump', 'power-outline'],
   ['floor', 'map-outline'],
   ['door', 'enter-outline'],
   ['vehicle', 'car-outline'],
