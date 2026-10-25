@@ -81,7 +81,7 @@ export function groupAlertsByDay(rows, now = new Date()) {
  * `cursor` is passed through so the per-site unread tally uses the same
  * definition of "new since last opened" as the row-level dot.
  */
-export function groupAlertsBySite(rows, cursor) {
+export function groupAlertsBySite(rows, cursor, readNames = null) {
   const groups = [];
   const byKey = new Map();
   let unknown = null;
@@ -96,7 +96,7 @@ export function groupAlertsBySite(rows, cursor) {
       else unknown = group;
     }
     group.rows.push(row);
-    if (isUnreadAlert(row, cursor)) group.unreadCount += 1;
+    if (isUnreadAlert(row, cursor) && !readNames?.has(row?.name)) group.unreadCount += 1;
   });
   if (unknown) groups.push(unknown);
   // Sites with unread alerts first, then alphabetical by site name. 'Unknown

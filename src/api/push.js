@@ -399,7 +399,7 @@ export function watchNotificationTaps(onTap) {
 
     const data = request?.content?.data;
     if (!data || data.type !== PUSH_TYPE_LIMIT_ALERT) return;
-    onTap();
+    onTap(data);
   };
 
   let sub = null;

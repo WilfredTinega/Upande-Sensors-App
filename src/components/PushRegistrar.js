@@ -52,9 +52,9 @@ export function PushRegistrar() {
     installForegroundHandler();
     // A tapped push opens the list, not Live: three breaches overnight are
     // three banners, and the person tapping the third wants to see all three.
-    // The tapped alert is the top row, and tapping THAT opens its readings.
-    return watchNotificationTaps(() => {
-      goToNotifications();
+    // The tapped alert opens in a message modal on top of that list.
+    return watchNotificationTaps((data) => {
+      goToNotifications(data?.alert || null);
     });
   }, []);
 

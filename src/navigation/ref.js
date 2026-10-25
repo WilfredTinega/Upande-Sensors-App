@@ -112,10 +112,10 @@ let notificationsReturnRoute = HOME_ROUTE;
  * and by a tapped push, which is why it is reachable from outside the
  * navigator like `goToLive`.
  */
-export function goToNotifications() {
+export function goToNotifications(alert = null) {
   if (!navigationRef.isReady()) return;
   if (currentRoute && currentRoute !== NOTIFICATIONS_ROUTE) notificationsReturnRoute = currentRoute;
-  navigationRef.navigate(NOTIFICATIONS_ROUTE);
+  navigationRef.navigate(NOTIFICATIONS_ROUTE, alert ? { alert } : undefined);
 }
 
 /** The Notifications header's back chevron. */
