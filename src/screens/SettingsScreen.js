@@ -128,8 +128,8 @@ export function SettingsScreen() {
       invalidate();
       refreshReference().catch(() => {});
       Alert.alert(
-        'Now viewing as user',
-        `You are now viewing the app as ${targetUser}. Sign out to return to your own account.`,
+        'Impersonating user',
+        `You are now impersonating ${targetUser}. Stop impersonating to return to your own account.`,
         [{ text: 'OK' }],
       );
       setImpersonatedBy(user?.name || '');
@@ -142,7 +142,7 @@ export function SettingsScreen() {
 
   const doStopImpersonation = useCallback(() => {
     Alert.alert(
-      'Stop viewing as user',
+      'Stop impersonating',
       'You will be signed out and need to sign back in as yourself.',
       [
         { text: 'Cancel', style: 'cancel' },
@@ -407,7 +407,7 @@ export function SettingsScreen() {
       <View style={{ backgroundColor: '#f59e0b', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 8, gap: 8 }}>
         <Ionicons name="eye-outline" size={14} color="#1c1917" />
         <Text style={{ fontSize: 12, fontWeight: '600', color: '#1c1917' }}>
-          Viewing as {user?.fullName || user?.name}
+          Impersonating {user?.fullName || user?.name}
         </Text>
         <Pressable onPress={doStopImpersonation} style={{ marginLeft: 8, backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 4, paddingHorizontal: 10, paddingVertical: 2 }}>
           <Text style={{ fontSize: 12, fontWeight: '700', color: '#1c1917' }}>Stop</Text>
@@ -612,7 +612,7 @@ export function SettingsScreen() {
         ) : null}
         {canImpersonate && !impersonatedBy ? (
           <Button
-            label="View as user…"
+            label="Impersonate user…"
             tone="ghost"
             style={{ marginTop: spacing.sm }}
             onPress={() => {
@@ -792,7 +792,7 @@ export function SettingsScreen() {
           onPress={(e) => e.stopPropagation()}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.border }}>
-            <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>View as user</Text>
+            <Text style={[type.body, { color: t.textPrimary, fontWeight: '600', fontFamily: font('600') }]}>Impersonate user</Text>
             <Pressable onPress={() => setShowImpersonate(false)} hitSlop={8}>
               <Ionicons name="close" size={20} color={t.textMuted} />
             </Pressable>
